@@ -59,7 +59,7 @@ class Scene:
     def goto(self, url):
         self.page.goto(BASE + url)
         self.page.wait_for_load_state("networkidle")
-        if url.startswith("/demo"):
+        if url.startswith("/demo/questions"):
             time.sleep(0.7)  # let the slide's enter animation finish
         self.setup()
 
@@ -125,13 +125,13 @@ Q_MARGIN = "What was net margin by region in Q3?"
 
 
 def scene_title(s):
-    s.goto("/demo?full#1")
+    s.goto("/demo/questions?full#1")
     s.caption("Memory you can govern, built on <b>MongoDB Atlas</b>")
     s.snap(3.8)
 
 
 def question_card(s, slide, text):
-    s.goto(f"/demo?full#{slide}")
+    s.goto(f"/demo/questions?full#{slide}")
     s.page.evaluate("() => document.querySelectorAll('.slide.active .actions').forEach(e => e.style.visibility = 'hidden')")
     s.caption(text)
     s.snap(2.2)
@@ -186,10 +186,10 @@ def scene_replay(s):
 
 
 def scene_atlas(s):
-    s.goto("/demo?full#15")
+    s.goto("/demo/questions?full#15")
     s.caption("Vector Search, Voyage AI, aggregation, change streams: <b>one Atlas cluster</b>")
     s.snap(5.2)
-    s.goto("/demo?full#1")
+    s.goto("/demo/questions?full#1")
     s.caption("<b>Lore</b> · memory you can govern, on MongoDB Atlas")
     s.snap(1.8)
 

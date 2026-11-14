@@ -1,4 +1,7 @@
-# Demo scripts
+# Demo scripts: track-questions version
+
+The default demo is now the memory-focused one at `/demo`; its script is `docs/demo-script-memory.md`.
+This deck is at `/demo/questions`.
 
 The demo answers the three track questions of **Memory You Can Govern**, each with a live proof and
 the MongoDB Atlas feature behind it.
@@ -13,9 +16,9 @@ The deck is part of the app. Start the app, then open:
 
 | Version | URL | Slides | Timer |
 | --- | --- | --- | --- |
-| In-person, 3 minutes | `http://localhost:8000/demo` | 6: title, the three questions, why Atlas, thank you | 3:00 |
-| 1 minute | `http://localhost:8000/demo?1min` | 4: title and the three questions | 1:00 |
-| Full | `http://localhost:8000/demo?full` | 16, with background slides | 8:00 |
+| In-person, 3 minutes | `http://localhost:8000/demo/questions` | 6: title, the three questions, why Atlas, thank you | 3:00 |
+| 1 minute | `http://localhost:8000/demo/questions?1min` | 4: title and the three questions | 1:00 |
+| Full | `http://localhost:8000/demo/questions?full` | 16, with background slides | 8:00 |
 
 **Keys:** → / Space next · ← back · **L** open the slide's first live demo · **Esc** back to the slides ·
 **F** full screen · **R** reset the timer (it starts when you leave the first slide).
@@ -43,7 +46,7 @@ Every number comes from real runs against the shared Atlas cluster on Nov 14: Ea
 
 ---
 
-## In-person demo: 3-minute slot, about 1.5 minutes of speaking (`/demo`)
+## In-person demo: 3-minute slot, about 1.5 minutes of speaking (`/demo/questions`)
 
 About 175 words, in short sentences.
 
@@ -80,7 +83,7 @@ one cluster."
 
 ---
 
-## 1-minute version (`/demo?1min`, about 110 words)
+## 1-minute version (`/demo/questions?1min`, about 110 words)
 
 **[1 · Title]** "Lore is shared memory for analyst agents, governed by people, on MongoDB Atlas."
 
