@@ -32,5 +32,11 @@ def index() -> FileResponse:
 
 @app.get("/demo", include_in_schema=False)
 def demo() -> FileResponse:
-    """Presentation deck for the demo; its live buttons open the app above the slides."""
+    """The demo deck (memory-focused); its live buttons open the app above the slides."""
+    return FileResponse(WEB / "demo-memory.html")
+
+
+@app.get("/demo/questions", include_in_schema=False)
+def demo_questions() -> FileResponse:
+    """The earlier deck, built around the three track questions."""
     return FileResponse(WEB / "demo.html")

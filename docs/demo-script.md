@@ -1,152 +1,181 @@
-# Demo scripts
+# Demo scripts: track-questions version
+
+The default demo is now the memory-focused one at `/demo`; its script is `docs/demo-script-memory.md`.
+This deck is at `/demo/questions`.
+
+The demo answers the three track questions of **Memory You Can Govern**, each with a live proof and
+the MongoDB Atlas feature behind it.
+
+| Track question | How Lore answers it | Live proof | Atlas feature |
+| --- | --- | --- | --- |
+| How do you keep one team's memory from leaking into another's? | Every memory has role rules, applied as Vector Search filters before retrieval | "Why did East's return rate rise in Q3?" asked by all three roles: the East store memory reaches Finance and the store manager, never the analyst | Atlas Vector Search with filters on status, role and expiry; Voyage AI `voyage-4` embeddings |
+| How does the agent fix or drop a memory that is wrong or expired? | Corrections create a new version a reviewer approves; expired memories stop being retrieved; forgotten ones keep an audit record | Net margin: 36% with the wrong memory, a correction becomes a proposal, the reviewer approves it, then 1.7% | One document per version; status and expiry as Vector Search filters; an audit collection |
+| How do you prove a memory changed behavior? | The same question is replayed with and without the memory, showing a different query and result | "Sales growth by region, August to September": gross revenue without memory, the agreed net revenue definition with it | The agent writes aggregation pipelines; every query is saved; eval 4/10 → 10/10 |
 
 The deck is part of the app. Start the app, then open:
 
 | Version | URL | Slides | Timer |
 | --- | --- | --- | --- |
-| 1 minute | `http://localhost:8000/demo?1min` | 4 | 1:00 |
-| 3 minutes | `http://localhost:8000/demo` | 8 | 3:00 |
-| Full | `http://localhost:8000/demo?full` | 13 | 8:00 |
+| In-person, 3 minutes | `http://localhost:8000/demo/questions` | 6: title, the three questions, why Atlas, thank you | 3:00 |
+| 1 minute | `http://localhost:8000/demo/questions?1min` | 4: title and the three questions | 1:00 |
+| Full | `http://localhost:8000/demo/questions?full` | 16, with background slides | 8:00 |
 
-**Keys:** → / Space next · ← back · **L** open the slide's live demo · **Esc** back to the slides ·
-**F** full screen · **R** reset the timer. The timer starts when you leave the first slide.
+**Keys:** → / Space next · ← back · **L** open the slide's first live demo · **Esc** back to the slides ·
+**F** full screen · **R** reset the timer (it starts when you leave the first slide).
 
-**Live buttons** open the real app over the slides, signed in as the right person, with the
-question filled in or already running. Reopening the same button shows the run already on screen,
-so you can run a slow comparison before the talk and just press **L** during it.
+**Live buttons** open the real app over the slides, signed in as the right person, with the question
+running. Every live run stays open: clicking the same button again shows its earlier result at once,
+so slow runs can be done before the talk. **Shift+click** (or Shift+L) runs it again.
 
-Every number in these scripts comes from real runs against the shared Atlas cluster on Nov 14:
-East Q3 net margin 36.1% with the wrong definition and 1.7% after the correction, East's Q3 return
-rate 34.9%, and the eval at 4/10 → 10/10 with memory.
+Every number comes from real runs against the shared Atlas cluster on Nov 14: East Q3 net margin
+36.1% with the wrong definition and 1.7% after the correction, and the eval at 4/10 → 10/10.
 
 ---
 
 ## Before you present
 
-1. **Wrong Net margin active** for all roles (the correction must still be possible). After any
-   rehearsal that approves a correction, put the wrong definition back as a new version
+1. **Wrong Net margin active** for all roles, and no pending Net margin proposals. After any
+   run-through that approves a correction, put the wrong definition back as a new version
    (propose + approve as Fatima); approving an older version is blocked.
-2. **Learning worker running** (`python -m app.workers.learning`, add `--auto-draft` to have it
-   draft the skill by itself) if you show the skill demo.
-3. **Skill demo prep** (skill demo only): Alex asks "Units sold by category in August" and Sam asks
-   "Units sold by category in September". The Skills tab should show that cluster at
-   2 episodes, not ready.
-4. **Pre-run the slow comparison:** on the three-roles slide, click **Run across all roles**, wait for
-   all three answers, press Esc, go back to slide 1.
-5. Answers take 10–30 s each. The lines in *italics* below are written to fill that wait.
+2. **Pre-run the two slow comparisons** from the deck, wait for the answers, press Esc each time:
+   - question 1 slide: **Ask as all three roles**
+   - question 3 slide: **Replay with and without memory**
+   On the question 2 slide you can also pre-run **1 · Ask (wrong memory)**.
+3. Go back to slide 1. During the talk, pressing the same buttons shows the finished results.
+4. Answers take 10–30 s each. Only question 2's correction and "ask again" run live.
 
 ---
 
-## 1-minute version (`/demo?1min`, about 140 words)
+## In-person demo: 3-minute slot, about 1.5 minutes of speaking (`/demo/questions`)
 
-**[1 · Lore]**
-"Analyst agents have a memory problem. They reinvent metric definitions every time, corrections
-vanish, and nothing stops them from showing data a user shouldn't see. Lore fixes that with
-shared memory that a human governs."
-
-**[2 · Three roles: press L, the results are already on screen]**
-"Here's the same question from three roles. Finance sees everything. The analyst can't see
-supplier cost. The East store manager only gets East. Every query goes through a guard before it
-touches MongoDB."
-
-**[3 · 36.1% → 1.7%]**
-"Memory is shared, so a wrong definition spreads to every agent. Here, East looked healthy at 36%.
-A finance lead corrected it, a reviewer approved it, and every agent now reports 1.7%. Every step
-is versioned and audited."
-
-**[4 · Eval]**
-"And we measured it: with the corrected memory, accuracy went from 4 out of 10 to 10 out of 10.
-Built on MongoDB Atlas and Vector Search. Thank you."
-
----
-
-## 3-minute version (`/demo`)
+About 175 words, in short sentences.
 
 **0:00 · [1 · Title]**
-"We built Lore: governed shared memory for analyst agents, for the Memory You Can Govern track. Our
-demo company is Northwind Outfitters, a retailer with 20 stores in 4 regions."
+"Hi, we are team Lore. Lore is shared memory for analyst agents. People govern it. It runs on
+MongoDB Atlas."
 
-**0:10 · [2 · The problem]**
-"Analyst agents have three problems. Every answer reinvents the definitions: ask 'is sales up?'
-twice and you might get gross revenue once and net revenue the next. Corrections disappear: a
-finance lead fixes a metric in one chat, and no one else's agent ever learns it. And everyone sees
-everything, unless something stops them."
+**0:10 · [2 · Question 1: press L, the results are already there]**
+"Question one: how do we stop memory leaking between teams? Three roles ask the same question. A
+store memory reaches Finance and the store manager. The analyst never gets it. Every memory has role
+rules. They run as Atlas Vector Search filters, on Voyage embeddings."
 
-**0:30 · [3 · Three roles: Run across all roles, or L if pre-run]**
-"Here's one question, return rate by region in Q3, asked by three people. Fatima is the finance
-lead and sees everything. Alex is an analyst and can't see supplier cost. Sam manages East stores
-and only sees East.
-*The model only plans. Our code checks every pipeline, adds the user's row filter and removes
-hidden fields before MongoDB runs it.*
-Same question, three correct answers. Sam's covers East only."
+**0:40 · [3 · Question 2]**
+"Question two: how do we fix a wrong memory?"
+*(click 1 · Ask)* "Our memory says East's margin is 36%. That is wrong."
+*(click 2 · Correct it, wait)* "Fatima corrects it. The agent files a new version, as a proposal."
+*(in the answer, click Review it now, then Approve, then Approve)* "A reviewer approves it. The old
+version is kept and audited. Expired and forgotten memories are never retrieved."
+*(Esc, click 4 · Ask again, wait)* "Now every agent says 1.7%."
 
-**1:10 · [4 · Wrong definition]**
-"Shared memory is powerful, so a wrong definition is dangerous. Ours says net margin ignores
-returns, so every agent tells us East's Q3 margin is a healthy 36%."
+**2:05 · [4 · Question 3: press L, the results are already there]**
+"Question three: how do we prove memory changed behavior? We replay the same question, with and
+without memory. The query is different. The result is different. In our eval, accuracy went from 4
+out of 10 to 10 out of 10."
 
-**1:25 · [5 · The correction: Make the correction]**
-"Fatima says net margin must subtract returns. The agent answers with her definition right away,
-but it doesn't change shared memory on its own. It files a proposal.
-*(Open Memory review, approve for every role)* The reviewer approves it for every role. The old
-version is superseded, not deleted, and both steps go into the audit log."
+**2:35 · [5 · Why MongoDB Atlas]**
+"MongoDB Atlas made this simple: Vector Search, Voyage embeddings, aggregation and change streams, in
+one cluster."
 
-**2:00 · [6 · After approval: Ask again]**
-"Now any agent asking the same question gets 1.7%. East's 35% return rate was eating its margin.
-One approval fixed every agent's answer."
+**2:50 · [6 · Thank you]**
+"Thank you."
 
-**2:35 · [7 · The eval]**
-"This isn't a one-off. On our eval, with the wrong definition in memory, accuracy with memory was 4
-out of 10. After the approved correction: 10 out of 10. Memory also fixed questions like sales
-growth, which the agent gets wrong on its own."
-
-**2:50 · [8 · Thank you]**
-"Lore runs on MongoDB Atlas: Vector Search with role and expiry filters for memory, guarded
-aggregation for every query, and the audit log beside it. Built by Jimmy, Paul, Chloe and Yue.
-Thank you."
+**If you are short on time:** skip "4 · Ask again" and say "after approval, every agent says 1.7%".
 
 ---
 
-## Full version with the live skill demo (about 4½ minutes)
+## 1-minute version (`/demo/questions?1min`, about 110 words)
 
-Slides 1–6 as in the 3-minute version (0:00–2:20), then:
+**[1 · Title]** "Lore is shared memory for analyst agents, governed by people, on MongoDB Atlas."
 
-**2:20 · [Skills tab: the "units sold" cluster at 2 episodes]**
-"Lore also learns from repetition. Alex and Sam have each asked for units sold by category, for
-different months. Each answered question became an episode: the pattern, its parameters and the
-query. Two isn't enough to trust yet."
+**[2 · Question 1: press L]** "No leaks between teams. Three roles ask one question. The store
+memory reaches Finance and the store manager, never the analyst. Role rules are Atlas Vector Search
+filters."
 
-**2:35 · [As Fatima, ask "Units sold by category in October"]**
-"Fatima asks the same kind of question for October.
-*When it's answered, a worker watching MongoDB's change stream turns it into a third episode.*
-*(Skills tab)* Three episodes from three people: the cluster is ready."
+**[3 · Question 2]** "Fixing a wrong memory. Memory said East's margin was 36%. Fatima corrected it,
+a reviewer approved the new version, and every agent now says 1.7%. Everything is audited."
 
-**3:05 · [Draft skill]**
-If the worker runs with `--auto-draft`, the draft appears on its own once the cluster is ready; then
-say "The worker drafted it automatically; a reviewer still has to publish it." Otherwise:
-"She drafts it. Claude turns the three queries into one template with the month as a parameter.
-*Lore tests it before anyone can use it: it replays the original questions and checks the numbers
-match, then runs it as every role to make sure nobody sees more than they should. A skill stores
-logic, never results.*"
+**[4 · Question 3: press L]** "Proof. The same question, with and without memory, gives a different
+query and a different result. Accuracy went from 4 out of 10 to 10 out of 10. Thank you."
 
-**3:40 · [Publish]**
-"Tests pass, she publishes it, and that's audited too."
+Pre-run everything for this version; there is no time for a live answer.
 
-**3:50 · [As Sam, ask "Units sold by category in July"]**
-"Sam asks for July. The agent doesn't write a new query: it reuses the skill Fatima just approved,
-and because skills run with the asker's permissions, Sam gets East only."
+---
 
-**4:15 · [7 · The eval]** and **4:30 · [8 · Thank you]** as in the 3-minute version.
+## 1-minute video
 
-The skill demo has not been rehearsed yet: run it once end to end before presenting.
+`demo/lore-demo-1min.mp4` (1080p, 59 seconds, captions and voice narration);
+`demo/lore-demo-1min-captions-only.mp4` is the same video without sound.
+
+It follows the three track questions. Every scene is a real run against the shared cluster; typing
+and waiting are shortened. The voice reads each caption word for word, and each caption stays on
+screen for as long as its line takes to say. Typed questions, clicks and key results are highlighted
+in blue.
+
+| Time | Caption and spoken line |
+| --- | --- |
+| 0:00 | Lore: memory you can govern, on MongoDB Atlas |
+| 0:04 | Question one: no leaks |
+| 0:06 | Three roles, one question |
+| 0:08 | Finance and the store manager get the store memory |
+| 0:11 | The analyst never does. Atlas Vector Search filters by role. |
+| 0:15 | Question two: fix a wrong memory |
+| 0:18 | Memory has a wrong definition |
+| 0:20 | Every agent says East's margin is 36% |
+| 0:24 | Fatima corrects it |
+| 0:26 | The agent files a proposal |
+| 0:28 | A reviewer sees it |
+| 0:30 | and approves it for every role |
+| 0:33 | The old version is kept and audited |
+| 0:35 | Now any agent asks again |
+| 0:37 | East's margin is 1.7% |
+| 0:40 | Question three: prove it |
+| 0:42 | Same question, with and without memory |
+| 0:45 | The query and the result both change |
+| 0:48 | Gross revenue becomes net revenue |
+| 0:50 | Vector Search, Voyage AI, aggregation, change streams: one Atlas cluster |
+| 0:57 | Lore: memory you can govern |
+
+To re-record (needs the app running, Microsoft Edge, and
+`pip install playwright imageio-ffmpeg edge-tts pillow truststore`):
+
+```bash
+python scripts/record_demo_video.py frames title q1 leak q2 wrong correct approve fixed q3 replay atlas
+python scripts/narrate_demo_video.py frames final demo/lore-demo-1min-captions-only.mp4 demo/lore-demo-1min.mp4
+```
+
+The first command records the scenes from the running app. The second speaks each line, redraws the
+captions to match (the lines are in `CUES` at the top of the script), sets each caption's time from
+its spoken line, and builds both videos.
+
+The `approve` scene approves a real correction. Afterwards, re-add the wrong Net margin as a new
+version (propose + approve as Fatima) so the live demo starts uncorrected again. The narration uses
+Microsoft's Edge text-to-speech service (voice "Andrew"); only the narration text is sent to it.
+
+---
+
+## Optional: live skill demo (adds about 2 minutes)
+
+Not part of the 3-minute slot. Prep: the learning worker running
+(`python -m app.workers.learning`, add `--auto-draft` to have it draft by itself), and two questions
+asked beforehand: Alex "Units sold by category in August", Sam "Units sold by category in September".
+The Skills tab should show that cluster at 2 episodes, not ready.
+
+1. As Fatima, ask "Units sold by category in October". The worker, watching a MongoDB change stream,
+   adds the third episode and the cluster becomes ready.
+2. In Skills, click **Draft skill** (or wait for the automatic draft). It is tested by replay and by
+   role before it can be published.
+3. Click **Publish**.
+4. As Sam, ask "Units sold by category in July": the agent reuses the skill, with Sam's permissions,
+   so he gets East only.
+
+This flow has not been rehearsed end to end.
 
 ---
 
 ## Fallback lines
 
-- **An answer is slow:** keep talking over the italic lines.
-- **The network is slow at the venue:** skip the live run on "After approval" and point at the
-  36.1% → 1.7% on the slide.
-- **The cluster isn't Ready after Fatima's question:** "The worker is still processing." Show the
-  Audit log, then refresh Skills.
-- **Sam's answer doesn't use the skill:** "The agent chose to plan it fresh this time; the skill is
-  published and offered to him." Show it in the Skills tab.
+- **An answer is slow:** keep talking, or say "each answer is a real query on Atlas".
+- **The network is slow at the venue:** skip the live steps of question 2 and say the numbers:
+  36% before, 1.7% after the approved correction.
+- **The replay shows the same result on both sides:** Shift+click to run it again; the agent
+  sometimes picks net revenue without memory.

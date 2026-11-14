@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lore Memory Demo</title>
+<link rel="stylesheet" href="/static/demo.css">
+<style>
+  /* Only what this version adds to demo.css */
+  .life { list-style: none; padding: 0; margin: 0 0 3vh; display: flex; gap: .6em; align-items: stretch; flex-wrap: wrap; }
+  .life li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .7em 1em;
+    display: flex; flex-direction: column; gap: .2em; flex: 1 1 9em; }
+  .life li span { color: var(--muted); font-size: .8em; }
+  .life li.now { border-color: var(--accent); background: var(--accent-soft); }
+  .life li.off { opacity: .75; }
+  .life.how li { flex-basis: 11em; font-size: 1.05em; }
+  .life.how li b { color: var(--accent); }
+  .beforeafter { display: flex; align-items: baseline; gap: .5em; margin: 0 0 3vh; font-size: 1.1em; flex-wrap: wrap; }
+  .beforeafter .n { font: 600 clamp(40px, 5.5vw, 88px)/1 Georgia, serif; font-variant-numeric: tabular-nums; }
+  /* architecture diagram */
+  .arch { width: 100%; max-height: 62vh; display: block; font-family: system-ui, "Segoe UI", sans-serif; }
+  .arch .b { fill: var(--card); stroke: var(--line); stroke-width: 1.5; }
+  .arch .guard, .arch .mem { stroke: var(--accent); fill: var(--accent-soft); }
+  .arch .audit { fill: var(--chip); }
+  .arch .cluster { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 7 6; }
+  .arch .t { fill: var(--fg); font-size: 17px; font-weight: 650; text-anchor: middle; }
+  .arch .s { fill: var(--muted); font-size: 12.5px; text-anchor: middle; }
+  .arch .s2 { fill: var(--muted); font-size: 14px; font-weight: 400; }
+  .arch .cl { fill: var(--accent); font-size: 13px; font-weight: 700; letter-spacing: .08em; }
+  .arch .l { fill: var(--muted); font-size: 14px; }
+  .arch .l.acc { fill: var(--accent); font-weight: 650; }
+  .arch .end { text-anchor: end; }
+  .arch .mid { text-anchor: middle; }
+  .arch .a { stroke: var(--muted); stroke-width: 1.8; fill: none; }
+  .arch .a.acc { stroke: var(--accent); stroke-width: 2.2; }
+  .arch .head { fill: var(--muted); }
+  .others { margin: 0 0 3vh; padding-left: 1.2em; max-width: 50em; }
+  .others li { margin-bottom: .55em; }
+</style>
+</head>
+<body>
+
+<main id="deck" aria-live="polite">
+
+  <!-- 1 -->
+  <section data-short data-1min class="slide slide-title">
+    <div class="kicker">Memory You Can Govern</div>
+    <h1 class="logo-xl">Lore</h1>
+    <p class="lede">An analyst agent for a retail company, with shared memory people govern</p>
+    <p class="muted">Northwind Outfitters: 20 stores, 4 regions. Staff ask business questions in plain language; Lore answers from the sales data in MongoDB Atlas.</p>
+  </section>
+
+  <!-- 2 -->
+  <section data-short data-1min class="slide">
+    <div class="kicker">How Lore works</div>
+    <h2>Ask a question. The agent queries MongoDB, and the team's knowledge builds up.</h2>
+    <ol class="life how">
+      <li><b>1 · Query</b><span>The agent writes a MongoDB aggregation and runs it, inside your permissions</span></li>
+      <li><b>2 · Session</b><span>Every question, query and answer is saved in MongoDB</span></li>
+      <li><b>3 · Episode</b><span>Repeated questions become episodes, then tested skills</span></li>
+      <li><b>4 · Memory</b><span>What the team agrees becomes shared memory, used by every agent</span></li>
+    </ol>
+    <p class="muted">Sales data, sessions, episodes and memories all live in one MongoDB Atlas cluster.</p>
+  </section>
+
+  <!-- 3 -->
+  <section data-short data-1min class="slide">
+    <div class="kicker">Architecture</div>
+    <h2>One question, one Atlas cluster</h2>
+    <svg class="arch" viewBox="0 0 1200 450" role="img" aria-label="Lore architecture: Claude plans a query, a guard checks it, MongoDB runs it; memories, skills, episodes, sessions and the audit log live in one Atlas cluster"><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0 0L10 5L0 10z"/></marker></defs><rect class="b" x="20" y="16" width="170" height="66" rx="9"/><text class="t" x="105.0" y="46.0">Question</text><text class="s" x="105.0" y="65.0">Fatima, Alex or Sam</text><rect class="b" x="240" y="16" width="250" height="66" rx="9"/><text class="t" x="365" y="46.0">Claude plans</text><text class="s" x="365" y="65.0">writes a pipeline, or picks a skill</text><rect class="b guard" x="530" y="16" width="170" height="66" rx="9"/><text class="t" x="615" y="46.0">Query guard</text><text class="s" x="615" y="65.0">row filter, hidden fields</text><rect class="b" x="740" y="16" width="190" height="66" rx="9"/><text class="t" x="835.0" y="46.0">MongoDB runs it</text><text class="s" x="835.0" y="65.0">aggregation on sales</text><rect class="b" x="980" y="16" width="200" height="66" rx="9"/><text class="t" x="1080.0" y="46.0">Claude explains</text><text class="s" x="1080.0" y="65.0">names the definition used</text><line class="a" x1="194" y1="49" x2="235" y2="49" marker-end="url(#ah)"/><line class="a" x1="494" y1="49" x2="525" y2="49" marker-end="url(#ah)"/><line class="a" x1="704" y1="49" x2="735" y2="49" marker-end="url(#ah)"/><line class="a" x1="934" y1="49" x2="975" y2="49" marker-end="url(#ah)"/><rect class="cluster" x="20" y="176" width="1160" height="262" rx="14"/><text class="cl" x="40" y="202">MONGODB ATLAS · ONE CLUSTER</text><rect class="b mem" x="40" y="222" width="280" height="68" rx="9"/><text class="t" x="180.0" y="253.0">memories</text><text class="s" x="180.0" y="272.0">versioned · role-scoped · voyage-4 vectors</text><rect class="b" x="350" y="222" width="150" height="68" rx="9"/><text class="t" x="425.0" y="253.0">skills</text><text class="s" x="425.0" y="272.0">tested, reviewed</text><rect class="b" x="530" y="222" width="150" height="68" rx="9"/><text class="t" x="605.0" y="253.0">episodes</text><text class="s" x="605.0" y="272.0">reusable analyses</text><rect class="b" x="710" y="222" width="180" height="68" rx="9"/><text class="t" x="800.0" y="253.0">sales</text><text class="s" x="800.0" y="272.0">business data</text><rect class="b" x="920" y="222" width="240" height="68" rx="9"/><text class="t" x="1040.0" y="253.0">sessions</text><text class="s" x="1040.0" y="272.0">every question, query, answer</text><rect class="b audit" x="40" y="376" width="1120" height="44" rx="9"/><text class="t" x="600" y="403"><tspan>audit_log</tspan><tspan class="s2">  ·  every query and every change to memory or skills</tspan></text><line class="a acc" x1="262" y1="86" x2="262" y2="217" marker-end="url(#ah)"/><text class="l end" x="252" y="128">a correction becomes a proposal</text><text class="l end" x="252" y="147">a reviewer approves the new version</text><line class="a acc" x1="300" y1="218" x2="300" y2="87" marker-end="url(#ah)"/><text class="l acc" x="312" y="128">Atlas Vector Search</text><text class="l" x="312" y="147">filters: status, role, expiry</text><line class="a" x1="815" y1="87" x2="815" y2="217" marker-start="url(#ah)" marker-end="url(#ah)"/><text class="l" x="827" y="138">pipeline in, rows out</text><line class="a" x1="1080" y1="86" x2="1080" y2="217" marker-end="url(#ah)"/><text class="l" x="1092" y="138">turn saved</text><path class="a acc" d="M1040 294V332H605V295" marker-end="url(#ah)"/><text class="l acc mid" x="822" y="353">change stream → learning worker</text><line class="a" x1="526" y1="256" x2="505" y2="256" marker-end="url(#ah)"/><line class="a acc" x1="470" y1="218" x2="470" y2="87" marker-end="url(#ah)"/><text class="l acc" x="482" y="128">published skills</text><text class="l" x="482" y="147">reused by the planner</text></svg>
+  </section>
+
+  <!-- 4 -->
+  <section data-short data-1min class="slide">
+    <div class="kicker">Live · the life of a shared memory</div>
+    <h2>One correction, approved once, fixes every agent</h2>
+    <ol class="life">
+      <li><b>Proposed</b><span>the agent files a correction; nothing changes yet</span></li>
+      <li class="now"><b>Approved</b><span>a reviewer makes it the active version</span></li>
+      <li class="off"><b>Superseded</b><span>the old version is kept</span></li>
+      <li class="off"><b>Expired · Forgotten</b><span>never retrieved; the audit record stays</span></li>
+    </ol>
+    <div class="beforeafter">
+      <span>East's Q3 net margin:</span>
+      <span class="n muted-num">36%</span><span class="muted">wrong memory</span>
+      <span class="arrow">→</span>
+      <span class="n bad-num">1.7%</span><span class="muted">after the approved correction</span>
+    </div>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="What was net margin by region in Q3?" data-run="ask">1 · Ask (wrong memory)</button>
+      <button class="live" data-user="fatima" data-q="Net margin must subtract returns. Show Q3 by region again" data-run="ask">2 · Correct it</button>
+      <button class="live secondary" data-user="fatima" data-tab="reviewer">3 · Memory review</button>
+      <button class="live" data-user="fatima" data-q="Net margin by region in Q3" data-run="ask">4 · Ask again</button>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section data-short data-1min class="slide">
+    <div class="kicker">Live · proof</div>
+    <h2>Memory changes the query and the result</h2>
+    <p class="answer-line">The same question, replayed <b>with and without</b> shared memory. The app shows what changed.</p>
+    <table class="eval">
+      <thead><tr><th>Eval, 5 questions × 2 runs</th><th>Without memory</th><th>With memory</th></tr></thead>
+      <tbody>
+        <tr><td>Wrong definition in memory</td><td>8 / 10</td><td class="bad-num">4 / 10</td></tr>
+        <tr><td>After the approved correction</td><td>8 / 10</td><td class="ok-num">10 / 10</td></tr>
+      </tbody>
+    </table>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="Sales growth by region, August to September" data-run="replay">Replay with and without memory</button>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section data-short data-1min class="slide">
+    <div class="kicker">The rest, in one line each</div>
+    <h2>Governed end to end, on MongoDB Atlas</h2>
+    <ul class="others">
+      <li><b>No leaks between teams:</b> every memory is scoped by role, as an Atlas Vector Search filter.</li>
+      <li><b>Found by meaning:</b> approved memories are embedded with Voyage AI <code>voyage-4</code>.</li>
+      <li><b>Safe queries:</b> the agent writes aggregation pipelines; a guard applies each user's permissions.</li>
+      <li><b>It keeps learning:</b> change streams turn repeated questions into tested, reviewed skills.</li>
+      <li><b>One cluster:</b> sales data, memories, vectors and the audit log side by side.</li>
+    </ul>
+    <div class="actions">
+      <button class="live secondary" data-user="fatima" data-tab="reviewer">Open Memory review</button>
+      <button class="live secondary" data-user="fatima" data-tab="audit">Open the audit log</button>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section data-short data-1min class="slide slide-title">
+    <h2 class="logo-l">Thank you</h2>
+    <div class="team">
+      <div><b>Jimmy</b><span>Data and access</span></div>
+      <div><b>Paul</b><span>Analyst agent</span></div>
+      <div><b>Chloe</b><span>Memory governance</span></div>
+      <div><b>Yue</b><span>Skills and interface</span></div>
+    </div>
+    <div class="actions center">
+      <button class="live" data-user="fatima" data-tab="analyst">Open Lore</button>
+    </div>
+  </section>
+
+</main>
+
+<nav class="controls" aria-label="Slide controls">
+  <button id="prev" aria-label="Previous slide">←</button>
+  <span id="counter">1 / 1</span>
+  <span id="timer" title="Starts when you leave the first slide · R resets">0:00 / 3:00</span>
+  <button id="next" aria-label="Next slide">→</button>
+  <span class="hint">← → to move · L to go live · Esc to come back · F for full screen · R resets the timer · Shift+L runs a live demo again</span>
+</nav>
+
+<div id="live" class="live-overlay" hidden>
+  <div class="live-bar">
+    <span class="live-dot"></span><span id="live-title">Live demo</span>
+    <button id="live-close">Back to slides <kbd>Esc</kbd></button>
+  </div>
+  <div id="live-frames"></div>
+</div>
+
+<script src="/static/demo.js"></script>
+</body>
+</html>
