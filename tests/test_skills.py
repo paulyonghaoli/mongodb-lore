@@ -460,6 +460,31 @@ def test_only_published_skills_are_offered_and_retire_withdraws_them(ready_clust
     assert event["details"] == {"reason": "No longer used"}
 
 
+def test_a_stale_skill_is_withdrawn_until_the_reviewer_publishes_it_again(ready_cluster):
+    fatima, alex = get_user("fatima"), get_user("alex")
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(fatima, name)
+    assert skills.mark_stale_for_metric("return_rate", 2) == [name]  # what approving Return rate v2 triggers
+    assert skills.offered_to(alex) == []
+    with pytest.raises(GuardError):
+        skills.render_for(alex, name, {"start": "2026-09-01", "end": "2026-10-01"})
+    (listed,) = skills.list_all()
+    assert (listed["status"], listed["stale_reason"]) == ("stale", "return_rate has a new version v2")
+    skills.publish(fatima, name)  # the reviewer confirms it still holds
+    assert [s["name"] for s in skills.offered_to(alex)] == [name]
+
+
+def test_a_turn_answered_by_a_skill_is_not_learned_from_again(ready_cluster, fake_llm, mock_db):
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(get_user("fatima"), name)
+    calls = len(fake_llm.calls)
+    mock_db[db.SESSIONS].insert_one(make_turn("s_d_t1", "alex", pipeline="[]", skill={
+        "name": name, "parameters": {"start": "2026-08-01", "end": "2026-09-01"}}))
+    learning.backlog()
+    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_d_t1"})["episode_status"] == "skipped: the turn reused a skill"
+    assert episodes_count() == 3 and len(fake_llm.calls) == calls  # no new episode, no model call
+
+
 def test_render_for_fills_a_published_template(ready_cluster):
     name = skills.generate(ready_cluster)["name"]
     skills.publish(get_user("fatima"), name)
