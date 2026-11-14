@@ -403,8 +403,13 @@ def test_learning_status_counts_what_became_of_answered_turns(fake_llm, mock_db,
         make_turn("s_a_t3", "alex", outcome="rejected")])
     learning.backlog()
     mock_db[db.SESSIONS].insert_one(make_turn("s_b_t1", "sam"))  # saved after the worker last looked
+    # activity written by scripts/synthesize_activity.py is counted apart from questions asked in the app
+    mock_db[db.SESSIONS].insert_one(make_turn("s_syn_t1", "alex", synthetic=True, episode_status="extracted"))
+    mock_db[db.EPISODES].insert_one({"episode_id": "ep_s_syn_t1", "turn_id": "s_syn_t1", "user_id": "alex", "cluster_id": "c_x",
+                                     "intent": "x", "synthetic": True})
     status = client.get("/api/skills/learning", headers={"X-User": "sam"}).json()
-    assert (status["extracted"], status["skipped"], status["waiting"], status["live_episodes"]) == (1, 1, 1, 1)
+    assert (status["extracted"], status["skipped"], status["waiting"]) == (1, 1, 1)
+    assert (status["live_episodes"], status["sample_episodes"]) == (1, 1)
 
 
 def test_only_the_reviewer_can_draft(ready_cluster, client):

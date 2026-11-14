@@ -250,14 +250,17 @@ def cluster_episodes(cluster_id: str, limit: int = 50) -> list[dict]:
 
 
 def learning_status() -> dict:
-    """How far the learning worker is: answered turns by what became of them."""
+    """What became of the answered questions asked through the app. Script-generated activity is counted apart."""
     counts = {"extracted": 0, "skipped": 0, "rejected": 0, "error": 0, "processing": 0, "waiting": 0}
-    for t in db.app_db()[db.SESSIONS].find({"outcome": {"$in": ["answered", "user_confirmed"]}}, {"episode_status": 1}):
+    asked = {"outcome": {"$in": ["answered", "user_confirmed"]}, "synthetic": {"$ne": True}}
+    for t in db.app_db()[db.SESSIONS].find(asked, {"episode_status": 1}):
         status = t.get("episode_status")
         key = status.split(":", 1)[0] if status else "waiting"
         counts[key] = counts.get(key, 0) + 1
-    live = db.app_db()[db.EPISODES].find_one({"synthetic": {"$ne": True}}, {"created_at": 1}, sort=[("created_at", -1)])
-    return {**counts, "live_episodes": db.app_db()[db.EPISODES].count_documents({"synthetic": {"$ne": True}}),
+    episodes = db.app_db()[db.EPISODES]
+    live = episodes.find_one({"synthetic": {"$ne": True}}, {"created_at": 1}, sort=[("created_at", -1)])
+    return {**counts, "live_episodes": episodes.count_documents({"synthetic": {"$ne": True}}),
+            "sample_episodes": episodes.count_documents({"synthetic": True}),
             "last_live_episode_at": live.get("created_at") if live else None}
 
 

@@ -738,15 +738,14 @@ function skillItem(s) {
 }
 
 function learningNote(l) {
-  const parts = [`${plural(l.extracted, "answered question")} became episodes`, `${l.skipped} skipped`];
+  // Two sources of episodes, never mixed up in this line: questions asked in the app, and sample activity loaded by a script.
+  const parts = [`${l.extracted} became episodes`, `${l.skipped} skipped`];
   if (l.rejected) parts.push(`${l.rejected} rejected`);
   if (l.error) parts.push(`${plural(l.error, "error")}`);
   if (l.processing) parts.push(`${l.processing} in progress`);
-  if (l.waiting) parts.push(`${l.waiting} not processed (asked before the learning worker started, or it is not running)`);
-  const live = l.live_episodes
-    ? `${plural(l.live_episodes, "episode")} from live questions, the latest at ${fmtTime(l.last_live_episode_at)}.`
-    : "No episode from a live question yet.";
-  return `Learning worker: ${parts.join(", ")}. ${live}`;
+  if (l.waiting) parts.push(`${l.waiting} not processed (the learning worker only takes questions asked after it starts)`);
+  const latest = l.last_live_episode_at ? ` The latest at ${fmtTime(l.last_live_episode_at)}.` : "";
+  return `Questions asked in the app: ${parts.join(", ")}.${latest} Sample activity loaded by script: ${plural(l.sample_episodes ?? 0, "episode")}.`;
 }
 
 async function loadSkills() {
