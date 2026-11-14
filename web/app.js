@@ -56,7 +56,7 @@ async function api(path, { method = "GET", body, as } = {}) {
 const slug = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 const shortName = (u) => (u?.display_name || u?.user_id || "").split(" (")[0];
 const userName = (id) => { const u = state.users.find((x) => x.user_id === id); return u ? shortName(u) : id; };
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const plural = (n, word) => `${n} ${n === 1 ? word : word.replace(/y$/, "ie") + "s"}`;
 const tags = (list, cls = "chip") => list.map((v) => `<span class="${cls}">${esc(v)}</span>`).join("");
 const roleTags = (roles) => tags((roles || []).map(roleLabel));
 
@@ -570,6 +570,80 @@ $("#mem-filters").addEventListener("click", (e) => {
 });
 $("#mem-refresh").addEventListener("click", (e) => busy([e.target], loadMemories));
 
+// ---------- reviewer: monthly query and memory review ----------
+// Reviewer-only routes under /api/memory-review (memory governance workstream).
+async function loadMonthlyReview() {
+  $("#monthly").classList.toggle("hidden", !state.me.can_review);
+  if (!state.me.can_review) return;
+  const runs = await api("/api/memory-review/runs");
+  const complete = runs.filter((r) => r.status === "complete");
+  const select = $("#monthly-batch");
+  const previous = select.value;
+  select.innerHTML = complete.length
+    ? complete.map((r) => `<option value="${esc(r.batch_id)}">${esc(r.batch_id)}</option>`).join("")
+    : '<option value="">No completed scan yet</option>';
+  if (complete.some((r) => r.batch_id === previous)) select.value = previous;
+  const failed = runs.find((r) => r.status === "failed");
+  $("#monthly-note").textContent = failed ? `The scan for ${failed.batch_id} failed: ${failed.error || "unknown error"}` : "";
+  $("#monthly-note").classList.toggle("hidden", !failed);
+
+  const batch = select.value;
+  if (!batch) {
+    $("#query-review-list").innerHTML = '<div class="empty">Run a scan to build the review queue.</div>';
+    $("#memory-review-list").innerHTML = "";
+    return;
+  }
+  const items = (type) => api(`/api/memory-review/items?batch_id=${encodeURIComponent(batch)}&item_type=${type}&status=pending`);
+  const [queries, memories] = await Promise.all([items("query"), items("memory")]);
+  const actions = (item, keep, remove) => `<div class="item-actions">
+    <button type="button" class="small secondary" data-review-item="${esc(item.item_id)}" data-review-action="retain">${keep}</button>
+    <button type="button" class="small danger" data-review-item="${esc(item.item_id)}" data-review-action="delete"
+      data-review-type="${esc(item.item_type)}" data-review-label="${esc(item.question || item.title)}">${remove}</button></div>`;
+  $("#query-review-list").innerHTML = queries.length ? queries.map((q) => `<div class="item">
+    <div class="item-head"><span class="status status-${esc(q.outcome)}">${esc(q.outcome)}</span>
+      <span class="item-title">${esc(q.question)}</span></div>
+    <div class="item-meta"><span>Asked by ${esc(userName(q.user_id))} (${esc(roleLabel(q.role))})</span>
+      <code>${esc(q.turn_id)}</code></div>
+    ${actions(q, "Keep", "Delete query")}</div>`).join("") : '<div class="empty">No queries are waiting for a decision.</div>';
+  $("#memory-review-list").innerHTML = memories.length ? memories.map((m) => `<div class="item">
+    <div class="item-head"><span class="item-title">${esc(m.title)}</span><span class="chip">v${esc(m.version)}</span></div>
+    <div class="item-body">${esc(m.content)}<div class="reason muted">${esc(m.review_reason)}</div></div>
+    <div class="item-meta"><code>${esc(m.memory_id)}</code></div>
+    ${actions(m, "Keep memory", "Forget memory")}</div>`).join("") : '<div class="empty">Every active memory was used in this month.</div>';
+}
+
+$("#monthly-run").addEventListener("click", (e) => busy([e.target], async () => {
+  const run = await api("/api/memory-review/run", { method: "POST" });
+  toast(`Monthly review ${run.batch_id}: ${plural(run.query_items ?? 0, "query")}, ${plural(run.memory_items ?? 0, "unused memory")}, ${
+    plural((run.proposed_memory_ids || []).length, "memory proposal")}.`);
+  await Promise.all([loadMonthlyReview(), loadMemories()]);
+}));
+$("#monthly-refresh").addEventListener("click", (e) => busy([e.target], loadMonthlyReview));
+$("#monthly-batch").addEventListener("change", () => loadMonthlyReview().catch((e) => toast(e.message, true)));
+$("#monthly").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-review-item]");
+  if (!b) return;
+  const path = `/api/memory-review/items/${encodeURIComponent(b.dataset.reviewItem)}/${b.dataset.reviewAction}`;
+  const reload = () => Promise.all([loadMonthlyReview(), loadMemories()]);
+  if (b.dataset.reviewAction === "retain") {
+    busy([b], async () => { await api(path, { method: "POST" }); toast("Kept. Recorded in the audit log."); await reload(); });
+    return;
+  }
+  const isQuery = b.dataset.reviewType === "query";
+  openDialog({
+    title: isQuery ? "Delete this query" : "Forget this memory", confirm: isQuery ? "Delete query" : "Forget memory", danger: true,
+    body: `<div class="quote">${esc(b.dataset.reviewLabel)}</div>${reasonField("Reason (required)", true)}
+      <div class="small muted">${isQuery
+        ? "The saved question and the episodes built from it are deleted, and a skill built on them is retired. The audit log keeps a record without the question text."
+        : "Its embedding is removed so it can never be retrieved again. The text and your reason stay for the audit record."}</div>`,
+    async onSubmit(form) {
+      await api(path, { method: "POST", body: { reason: form.get("reason").trim() } });
+      toast(`${isQuery ? "Query deleted" : "Memory forgotten"}. Recorded in the audit log.`);
+      await reload();
+    },
+  });
+});
+
 // ---------- skills ----------
 function prettyJson(text) {
   try { return JSON.stringify(typeof text === "string" ? JSON.parse(text) : text, null, 2); } catch { return String(text); }
@@ -598,99 +672,6 @@ function skillItem(s) {
     if (["draft", "stale", "published"].includes(s.status)) {
       actions.push(`<button type="button" class="small danger" data-skill="${esc(s.name)}" data-act="retire">Retire</button>`);
     }
-    const extra = m.forgotten ? `<div class="muted small">forgotten by ${esc(m.forgotten.by)}: ${esc(m.forgotten.reason)}</div>` : "";
-    return `<tr>
-      <td>${esc(m.memory_id)}</td><td>${esc(m.title)}${m.source?.corrects_memory ? `<div class="muted small">corrects ${esc(m.source.corrects_memory)}</div>` : ""}</td><td>${m.version}</td>
-      <td class="status-${esc(m.status)}">${esc(m.status)}</td>
-      <td>${(m.visibility || []).map((v) => `<span class="chip">${esc(v)}</span>`).join("")}</td>
-      <td class="small">${m.expires_at ? esc(new Date(m.expires_at).toLocaleString()) : "No expiry"}</td>
-      <td class="content">${esc(m.content)}${extra}</td>
-      <td class="small">${esc(m.source?.proposed_by)}${m.approved_by ? ` → ${esc(m.approved_by)}` : ""}</td>
-      <td>${actions.map(([a, l]) => `<button data-mem="${esc(m.memory_id)}" data-act="${a}">${l}</button>`).join(" ")}</td>
-    </tr>`;
-  }).join("");
-}
-
-async function loadMonthlyReview() {
-  const runs = await api("/api/memory-review/runs");
-  const select = $("#monthly-batch");
-  const previous = select.value;
-  select.innerHTML = '<option value="">Select a completed scan</option>' + runs
-    .filter((r) => r.status === "complete")
-    .map((r) => `<option value="${esc(r.batch_id)}">${esc(r.batch_id)}</option>`).join("");
-  if (runs.some((r) => r.batch_id === previous && r.status === "complete")) select.value = previous;
-  else if (select.options.length > 1) select.selectedIndex = 1;
-
-  const batch = select.value;
-  if (!batch) {
-    $("#query-review-table tbody").innerHTML = "";
-    $("#memory-review-table tbody").innerHTML = "";
-    return;
-  }
-  const [queries, memories] = await Promise.all([
-    api(`/api/memory-review/items?batch_id=${encodeURIComponent(batch)}&item_type=query&status=pending`),
-    api(`/api/memory-review/items?batch_id=${encodeURIComponent(batch)}&item_type=memory&status=pending`),
-  ]);
-  $("#query-review-table tbody").innerHTML = queries.map((item) => `<tr>
-    <td>${esc(item.user_id)} <span class="muted small">(${esc(item.role)})</span></td>
-    <td class="content">${esc(item.question)}</td><td>${esc(item.outcome)}</td>
-    <td><button data-review-item="${esc(item.item_id)}" data-review-action="retain">Keep</button>
-        <button data-review-item="${esc(item.item_id)}" data-review-action="delete">Delete query</button></td>
-  </tr>`).join("");
-  $("#memory-review-table tbody").innerHTML = memories.map((item) => `<tr>
-    <td>${esc(item.title)} <span class="muted small">${esc(item.memory_id)}</span></td>
-    <td>${item.version}</td><td class="content">${esc(item.content)}<div class="muted small">${esc(item.review_reason)}</div></td>
-    <td><button data-review-item="${esc(item.item_id)}" data-review-action="retain">Keep memory</button>
-        <button data-review-item="${esc(item.item_id)}" data-review-action="delete">Forget memory</button></td>
-  </tr>`).join("");
-}
-
-$("#monthly-run").addEventListener("click", (e) => withBusy([e.target], async () => {
-  const summary = await api("/api/memory-review/run", { method: "POST" });
-  alert(`Monthly review ${summary.batch_id}: ${summary.query_items} queries, ${summary.memory_items} unused memories, ${summary.proposed_memory_ids.length} memory proposals.`);
-  await loadMonthlyReview();
-}));
-$("#monthly-refresh").addEventListener("click", () => loadMonthlyReview().catch((e) => alert(e.message)));
-$("#monthly-batch").addEventListener("change", () => loadMonthlyReview().catch((e) => alert(e.message)));
-document.querySelector("#reviewer").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-review-item]");
-  if (!b) return;
-  const action = b.dataset.reviewAction, itemId = b.dataset.reviewItem;
-  let body;
-  if (action === "delete") {
-    const reason = prompt("Reason for deleting this query or forgetting this memory:");
-    if (reason === null) return;
-    body = { reason };
-  }
-  withBusy([b], async () => {
-    await api(`/api/memory-review/items/${encodeURIComponent(itemId)}/${action}`, {
-      method: "POST", ...(body ? { body } : {}),
-    });
-    await loadMonthlyReview();
-    await loadMemories();
-  });
-});
-
-$("#mem-table").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-act]");
-  if (!b) return;
-  const act = b.dataset.act, id = b.dataset.mem;
-  let body = {};
-  if (act === "approve") {
-    const row = b.closest("tr");
-    const current = [...row.querySelectorAll(".chip")].map((x) => x.textContent).join(", ");
-    const roles = prompt("Roles that can read this memory (finance_lead, analyst, store_manager):", current);
-    if (roles === null) return;
-    const selected = roles.split(",").map((x) => x.trim()).filter(Boolean);
-    if (!selected.length) { alert("Select at least one role."); return; }
-    const expiry = prompt("Expiry date/time in ISO format, or leave blank for no expiry:", "");
-    if (expiry === null) return;
-    body = { visibility: selected, ...(expiry.trim() ? { expires_at: expiry.trim() } : {}) };
-  }
-  if (act === "reject" || act === "forget" || act === "expire") {
-    const reason = prompt(`Reason to ${act} ${id}?`);
-    if (reason === null) return;
-    body = { reason };
   }
   const params = Object.entries(s.parameters || {});
   const versions = Object.entries(s.metric_versions || {}).map(([k, v]) => `${k}@${v}`);
@@ -703,6 +684,7 @@ $("#mem-table").addEventListener("click", (e) => {
       ${availability}</div>
     <div class="item-body">${esc(s.description)}
       ${s.status === "stale" && s.stale_reason ? `<div class="reason error">Needs review: ${esc(s.stale_reason)}</div>` : ""}
+      ${s.status === "retired" && s.retired_reason ? `<div class="reason muted">Retired: ${esc(s.retired_reason)}</div>` : ""}
       <details><summary>Parameters, fields and query template</summary>
         ${params.length ? `<div class="kv"><span>Parameters</span><span>${params.map(([k, v]) => `<code>${esc(k)}</code> ${esc(v)}`).join("<br>")}</span></div>` : ""}
         <div class="kv"><span>Reads fields</span><span>${tags(s.required_fields || []) || "–"}</span></div>
@@ -759,22 +741,100 @@ $("#skill-list").addEventListener("click", (e) => {
 $("#skills-refresh").addEventListener("click", (e) => busy([e.target], loadSkills));
 
 // ---------- audit ----------
-async function loadAudit() {
-  const events = await api("/api/audit?limit=100");
-  $("#audit-table tbody").innerHTML = events.map((ev) => `<tr><td class="small">${esc(ev.ts.replace("T", " ").slice(0, 19))}</td>
-    <td>${esc(ev.actor)}</td><td>${esc(ev.role)}</td><td>${esc(ev.action)}</td>
-    <td>${esc(ev.target?.kind)} ${esc(ev.target?.id)}</td>
-    <td class="content small">${esc(JSON.stringify(Object.fromEntries(Object.entries(ev.details || {}).filter(([k]) => k !== "pipeline"))))}</td></tr>`).join("");
-}
-$("#audit-refresh").addEventListener("click", () => loadAudit().catch((e) => alert(e.message)));
+const AUDIT_FILTERS = [["", "All"], ["query", "Queries"], ["memory", "Memory"], ["skill", "Skills"], ["review", "Review"]];
+const ACTION_LABELS = {
+  query: "Query", memory_propose: "Memory proposed", memory_approve: "Memory approved", memory_reject: "Memory rejected",
+  memory_expire: "Memory expired", memory_forget: "Memory forgotten", skill_publish: "Skill published", skill_retire: "Skill retired",
+  query_delete: "Query deleted", review_retain: "Kept after review",
+};
 
-// ---------- tabs and users ----------
-document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
-  document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
-  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== t.dataset.tab));
-  if (t.dataset.tab === "reviewer") { loadMemories().catch((e) => alert(e.message)); loadSkills().catch((e) => alert(e.message)); loadMonthlyReview().catch((e) => alert(e.message)); }
-  if (t.dataset.tab === "audit") loadAudit().catch((e) => alert(e.message));
-}));
+function auditSummary(ev) {
+  const d = ev.details || {};
+  if (ev.action === "query") {
+    const limits = [
+      ...Object.entries(d.filters || {}).map(([k, v]) => `rows where ${k} = ${v}`),
+      ...((d.removed_fields || []).length ? [`hidden: ${d.removed_fields.join(", ")}`] : []),
+    ];
+    return `${d.query_deleted ? '<span class="muted">Question deleted after review</span>' : `“${esc(d.question)}”`}<div class="small muted">${d.rejected ? `<span class="error">Blocked: ${esc(d.rejected)}</span>` : `Status ${esc(d.status)}`}
+      ${limits.length ? ` · ${esc(limits.join(" · "))}` : " · all rows and fields"}${d.turn_id ? ` · turn <code>${esc(d.turn_id)}</code>` : ""}</div>`;
+  }
+  const parts = [];
+  if (d.title) parts.push(`${esc(d.title)}${d.version ? ` v${esc(d.version)}` : ""}`);
+  else if (d.version) parts.push(`v${esc(d.version)}`);
+  if (d.reason) parts.push(`Reason: ${esc(d.reason)}`);
+  if (d.previous_status) parts.push(`was ${esc(d.previous_status)}`);
+  if (d.visibility) parts.push(`visible to ${esc(d.visibility.map(roleLabel).join(", "))}`);
+  if (d.superseded?.length) parts.push(`supersedes ${esc(d.superseded.join(", "))}`);
+  if (d.corrects_memory) parts.push(`corrects ${esc(d.corrects_memory)}`);
+  if (d.batch_id) parts.push(`monthly review ${esc(d.batch_id)}`);
+  if (d.episodes_deleted) parts.push(`${plural(d.episodes_deleted, "episode")} deleted`);
+  return parts.join(" · ");
+}
+
+function renderAudit() {
+  pills($("#audit-filters"), AUDIT_FILTERS, state.auditFilter);
+  const group = (ev) => (ev.action === "query_delete" ? "review" : ev.action.split("_")[0]);
+  const shown = state.audit.filter((ev) => !state.auditFilter || group(ev) === state.auditFilter);
+  $("#audit-note").textContent = state.me.can_review
+    ? "Every query and every change to memory or skills, newest first."
+    : "You see your own activity. Reviewers see everyone's.";
+  if (!shown.length) { $("#audit-list").innerHTML = '<div class="empty">No events.</div>'; return; }
+  $("#audit-list").innerHTML = `<table class="audit-table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+    <tbody>${shown.map((ev) => {
+      const kind = ev.action === "query" ? (ev.details?.rejected ? "blocked" : "query")
+        : ev.action === "query_delete" ? "review" : ev.action.split("_")[0];
+      return `<tr><td class="when">${esc(fmtTime(ev.ts))}</td>
+        <td>${esc(userName(ev.actor))} <span class="muted small">${esc(roleLabel(ev.role))}</span></td>
+        <td><span class="act act-${kind}">${esc(kind === "blocked" ? "Query blocked" : ACTION_LABELS[ev.action] || ev.action)}</span></td>
+        <td><code>${esc(ev.target?.id)}</code></td><td>${auditSummary(ev)}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+async function loadAudit() { state.audit = await api("/api/audit?limit=200"); renderAudit(); }
+$("#audit-filters").addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (b) { state.auditFilter = b.dataset.value; renderAudit(); }
+});
+$("#audit-refresh").addEventListener("click", (e) => busy([e.target], loadAudit));
+
+// ---------- tabs and identity ----------
+const LOADERS = { reviewer: () => Promise.all([loadMemories(), loadMonthlyReview()]), skills: loadSkills, audit: loadAudit };
+
+function syncUrl() { history.replaceState(null, "", `?user=${encodeURIComponent(state.me.user_id)}#${state.tab}`); }
+
+function showTab(name) {
+  if (!$(`#${CSS.escape(name)}.panel`)) name = "analyst";
+  state.tab = name;
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  $$(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== name));
+  syncUrl();
+  LOADERS[name]?.().catch((e) => toast(e.message, true));
+}
+
+function renderIdentity() {
+  const u = state.me;
+  const rows = Object.entries(u.rows || {});
+  $("#identity").innerHTML = [
+    `<span class="tag">${esc(roleLabel(u.role))}</span>`,
+    `<span class="tag${rows.length ? " tag-warn" : ""}">Rows: ${rows.length ? esc(rows.map(([k, v]) => `${k} = ${v}`).join(", ")) : "all"}</span>`,
+    `<span class="tag${u.hidden_fields?.length ? " tag-warn" : ""}">Hidden fields: ${u.hidden_fields?.length ? esc(u.hidden_fields.join(", ")) : "none"}</span>`,
+    u.can_review ? '<span class="tag tag-accent">Reviewer</span>' : "",
+  ].join("");
+}
+
+// Switching user starts clean: a new session, no results from the previous user, fresh lists.
+function setUser(id) {
+  state.me = state.users.find((u) => u.user_id === id) || state.users[0];
+  $("#user").value = state.me.user_id;
+  state.runToken++;
+  state.runs = null;
+  $$("#ask-btn, #replay-btn, #roles-btn").forEach((b) => (b.disabled = false));
+  resetSession();
+  renderIdentity();
+  renderRuns();
+  showTab(state.tab);
+  if (state.tab !== "reviewer") refreshPending();
+}
 
 async function init() {
   state.users = await fetch("/api/users").then((r) => r.json());
