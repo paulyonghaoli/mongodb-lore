@@ -5,7 +5,7 @@ The deck is part of the app. Start the app, then open:
 | Version | URL | Slides | Timer |
 | --- | --- | --- | --- |
 | 1 minute | `http://localhost:8000/demo?1min` | 4 | 1:00 |
-| 3 minutes | `http://localhost:8000/demo` | 8 | 3:00 |
+| 3 minutes | `http://localhost:8000/demo` | 6 | 3:00 |
 | Full | `http://localhost:8000/demo?full` | 13 | 8:00 |
 
 **Keys:** → / Space next · ← back · **L** open the slide's live demo · **Esc** back to the slides ·
@@ -23,7 +23,9 @@ rate 34.9%, and the eval at 4/10 → 10/10 with memory.
 
 ## Before you present
 
-1. **Wrong Net margin active** for all roles (the correction must still be possible). After any
+1. **Wrong Net margin active** for all roles (the correction must still be possible). In Memory
+   review, approve the pending Net margin with the **highest version number**; older pending ones
+   are stale test proposals. After any
    rehearsal that approves a correction, put the wrong definition back as a new version
    (propose + approve as Fatima); approving an older version is blocked.
 2. **Learning worker running** (`python -m app.workers.learning`, add `--auto-draft` to have it
@@ -60,55 +62,67 @@ Built on MongoDB Atlas and Vector Search. Thank you."
 
 ---
 
-## 3-minute version (`/demo`)
+## In-person demo: 3-minute slot, 1.5 minutes of speaking (`/demo`, 6 slides)
+
+About 160 words in short sentences. The rest of the 3 minutes is the live answers (10–30 s each):
+stay quiet or use the *italic* lines while they load.
 
 **0:00 · [1 · Title]**
-"We built Lore: governed shared memory for analyst agents, for the Memory You Can Govern track. Our
-demo company is Northwind Outfitters, a retailer with 20 stores in 4 regions."
+"Hi, we are team Lore. Analyst agents forget definitions and show too much data. Lore gives them
+shared memory that people govern."
 
-**0:10 · [2 · The problem]**
-"Analyst agents have three problems. Every answer reinvents the definitions: ask 'is sales up?'
-twice and you might get gross revenue once and net revenue the next. Corrections disappear: a
-finance lead fixes a metric in one chat, and no one else's agent ever learns it. And everyone sees
-everything, unless something stops them."
+**0:10 · [2 · Three roles: press L, the results are already on screen]**
+"One question, three roles. Fatima is finance: she sees everything. Alex is an analyst: no supplier
+cost. Sam manages East stores: he sees only East. A guard checks every query before MongoDB runs it."
 
-**0:30 · [3 · Three roles: Run across all roles, or L if pre-run]**
-"Here's one question, return rate by region in Q3, asked by three people. Fatima is the finance
-lead and sees everything. Alex is an analyst and can't see supplier cost. Sam manages East stores
-and only sees East.
-*The model only plans. Our code checks every pipeline, adds the user's row filter and removes
-hidden fields before MongoDB runs it.*
-Same question, three correct answers. Sam's covers East only."
+**0:40 · [3 · The correction: click Make the correction]**
+"Our shared memory has a wrong definition. It says East's margin is 36%. Fatima corrects it: net
+margin must subtract returns."
+*(answer appears)* "The agent does not change memory itself. It files a proposal."
+*(click Review it now, then Approve on the pending Net margin with the highest version, then Approve)*
+"The reviewer approves it for every role. The old version is kept. Every step is audited."
 
-**1:10 · [4 · Wrong definition]**
-"Shared memory is powerful, so a wrong definition is dangerous. Ours says net margin ignores
-returns, so every agent tells us East's Q3 margin is a healthy 36%."
+**1:50 · [4 · After approval: click Ask again]**
+"Now we ask again." *(answer appears)* "Every agent says 1.7%. One approval fixed all agents."
 
-**1:25 · [5 · The correction: Make the correction]**
-"Fatima says net margin must subtract returns. The agent answers with her definition right away,
-but it doesn't change shared memory on its own. It files a proposal.
-*(Open Memory review, approve for every role)* The reviewer approves it for every role. The old
-version is superseded, not deleted, and both steps go into the audit log."
+**2:25 · [5 · The eval]**
+"We measured it. With memory, accuracy went from 4 out of 10 to 10 out of 10. Repeated questions
+also become tested skills."
 
-**2:00 · [6 · After approval: Ask again]**
-"Now any agent asking the same question gets 1.7%. East's 35% return rate was eating its margin.
-One approval fixed every agent's answer."
+**2:45 · [6 · Thank you]**
+"Lore is built on MongoDB Atlas and Vector Search. Thank you."
 
-**2:35 · [7 · The eval]**
-"This isn't a one-off. On our eval, with the wrong definition in memory, accuracy with memory was 4
-out of 10. After the approved correction: 10 out of 10. Memory also fixed questions like sales
-growth, which the agent gets wrong on its own."
+**If you are short on time:** skip slide 4's live run and point at 36.1% → 1.7% on the slide.
 
-**2:50 · [8 · Thank you]**
-"Lore runs on MongoDB Atlas: Vector Search with role and expiry filters for memory, guarded
-aggregation for every query, and the audit log beside it. Built by Jimmy, Paul, Chloe and Yue.
-Thank you."
+---
+
+## 1-minute video
+
+`demo/lore-demo-1min.mp4` (1080p, 59 seconds, amber captions and voice narration);
+`demo/lore-demo-1min-captions-only.mp4` is the same video without sound.
+
+Every scene is a real run against the shared cluster: the three-role comparison, the wrong 36%
+answer, Fatima's correction and the agent's proposal, the reviewer's approval, and the 1.7% answer
+citing the new version. Only the waiting time is cut. Typed questions, clicks and key rows are
+highlighted in blue.
+
+To re-record (needs the app running, Microsoft Edge, and `pip install playwright imageio-ffmpeg edge-tts truststore`):
+
+```bash
+python scripts/record_demo_video.py frames title problem roles wrong correct approve fixed skills proof
+python scripts/record_demo_video.py frames --build demo/lore-demo-1min-captions-only.mp4
+python scripts/narrate_demo_video.py frames demo/lore-demo-1min-captions-only.mp4 demo/lore-demo-1min.mp4
+```
+
+The `approve` scene approves a real correction. Afterwards, re-add the wrong Net margin as a new
+version (propose + approve as Fatima) so the live demo starts uncorrected again. The narration uses
+Microsoft's Edge text-to-speech service (voice "Andrew"); only the narration text is sent to it.
 
 ---
 
 ## Full version with the live skill demo (about 4½ minutes)
 
-Slides 1–6 as in the 3-minute version (0:00–2:20), then:
+Slides 1–4 as in the in-person demo (to about 2:20), then, in the app:
 
 **2:20 · [Skills tab: the "units sold" cluster at 2 episodes]**
 "Lore also learns from repetition. Alex and Sam have each asked for units sold by category, for
@@ -135,7 +149,7 @@ logic, never results.*"
 "Sam asks for July. The agent doesn't write a new query: it reuses the skill Fatima just approved,
 and because skills run with the asker's permissions, Sam gets East only."
 
-**4:15 · [7 · The eval]** and **4:30 · [8 · Thank you]** as in the 3-minute version.
+**4:15 · [The eval]** and **4:30 · [Thank you]** as in the in-person demo.
 
 The skill demo has not been rehearsed yet: run it once end to end before presenting.
 
