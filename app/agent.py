@@ -137,15 +137,42 @@ def _columns(rows: list[dict]) -> list[str]:
     return cols
 
 
+HISTORY_TURNS = 4
+
+
+def session_history(user: UserContext, session_id: str, limit: int = HISTORY_TURNS) -> list[dict]:
+    """Earlier answered turns of this session, for follow-up questions.
+
+    Only the asking user's own turns: session_id comes from the client, so a turn
+    from another user (or role) must never leak into this user's context.
+    """
+    cur = (db.app_db()[db.SESSIONS]
+           .find({"session_id": session_id, "user_id": user.user_id, "outcome": "answered"},
+                 {"_id": 0, "question": 1, "pipeline": 1, "answer": 1})
+           .sort("ts", -1).limit(limit))
+    return list(reversed(list(cur)))
+
+
+def _history_text(history: list[dict]) -> str:
+    if not history:
+        return ""
+    lines = ["Earlier in this conversation (use it to resolve follow-ups like \"break that down by store\"):"]
+    for i, h in enumerate(history, 1):
+        lines.append(f"{i}. Question: {h['question']}\n   Pipeline: {h['pipeline']}\n   Answer: {h['answer']}")
+    return "\n".join(lines) + "\n\n"
+
+
 def _new_turn_id(session_id: str) -> str:
     n = db.app_db()[db.SESSIONS].count_documents({"session_id": session_id})
     return f"{session_id}_t{n + 1}"
 
 
 def plan(user: UserContext, question: str, memories: list[dict], offered: list[dict],
-         usage: llm.Usage, extra_messages: list[dict] | None = None) -> AgentOutput:
+         usage: llm.Usage, extra_messages: list[dict] | None = None,
+         history: list[dict] | None = None) -> AgentOutput:
     today = datetime.now(timezone.utc).date().isoformat()
-    messages = [{"role": "user", "content": f"Today is {today}.\n\nQuestion: {question}"}]
+    messages = [{"role": "user",
+                 "content": f"Today is {today}.\n\n{_history_text(history or [])}Question: {question}"}]
     messages += extra_messages or []
     raw = llm.complete(_system_prompt(user, memories, offered), messages, usage, schema=PLAN_SCHEMA)
     pipeline = json_util.loads(raw["pipeline_json"] or "[]")
@@ -181,7 +208,7 @@ def explain(user: UserContext, question: str, out: AgentOutput, rows: list[dict]
 
 
 def ask(user: UserContext, question: str, session_id: str | None = None,
-        use_memory: bool = True) -> dict:
+        use_memory: bool = True, use_history: bool = True) -> dict:
     settings = get_settings()
     usage = llm.Usage()
     session_id = session_id or f"s_{uuid.uuid4().hex[:6]}"
@@ -189,8 +216,9 @@ def ask(user: UserContext, question: str, session_id: str | None = None,
 
     memories = memory.retrieve(user, question, use_memory=use_memory)
     offered = skills.offered_to(user)
+    history = session_history(user, session_id) if use_history else []
 
-    out = plan(user, question, memories, offered, usage)
+    out = plan(user, question, memories, offered, usage, history=history)
     pipeline = out.pipeline
     skill_used = None
     if out.skill:
@@ -224,7 +252,7 @@ def ask(user: UserContext, question: str, session_id: str | None = None,
                 answer = "The query failed to run."
                 break
             # One repair attempt: tell the model what went wrong
-            out = plan(user, question, memories, offered, usage, extra_messages=[
+            out = plan(user, question, memories, offered, usage, history=history, extra_messages=[
                 {"role": "assistant", "content": json.dumps({"pipeline_json": json_util.dumps(pipeline)})},
                 {"role": "user", "content": f"That pipeline failed in MongoDB: {e}. Fix it."},
             ])
