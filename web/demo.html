@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lore Demo</title>
+<link rel="stylesheet" href="/static/demo.css">
+</head>
+<body>
+
+<main id="deck" aria-live="polite">
+
+  <!-- 1 -->
+  <section data-1min data-short class="slide slide-title">
+    <div class="kicker">Memory You Can Govern</div>
+    <h1 class="logo-xl">Lore</h1>
+    <p class="lede">Governed shared memory for analyst agents</p>
+    <p class="muted">Northwind Outfitters · 20 stores · 4 regions · synthetic retail data in MongoDB Atlas</p>
+  </section>
+
+  <!-- 2 -->
+  <section data-short class="slide">
+    <h2>Analyst agents forget, disagree and overshare</h2>
+    <div class="grid3">
+      <div class="card"><div class="card-num">1</div><h3>Every answer reinvents the definitions</h3>
+        <p>Ask "is sales up?" twice and the agent may use gross revenue once and net revenue the next time.</p></div>
+      <div class="card"><div class="card-num">2</div><h3>Corrections disappear</h3>
+        <p>A finance lead fixes a metric in one chat. Nobody else's agent ever learns it, and nobody approved it.</p></div>
+      <div class="card"><div class="card-num">3</div><h3>Everyone sees everything</h3>
+        <p>A store manager's agent can read supplier costs and other regions' rows unless something stops it.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide">
+    <h2>Lore: shared memory with a reviewer in the loop</h2>
+    <div class="grid2">
+      <div class="card"><h3>Governed memory</h3><p>Definitions, decisions and facts are versioned and scoped by role. A reviewer approves, rejects, expires or forgets them.</p></div>
+      <div class="card"><h3>Query guard</h3><p>The model only plans. Code checks every pipeline, adds the user's row filter and removes hidden fields before it runs.</p></div>
+      <div class="card"><h3>Skills from repetition</h3><p>Analyses that several people repeat become tested templates that run with the caller's permissions.</p></div>
+      <div class="card"><h3>Everything audited</h3><p>Every query and every change to memory or skills is an audit event.</p></div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide">
+    <h2>How one question flows</h2>
+    <ol class="flow">
+      <li><b>Who is asking</b><span>role, row filter, hidden fields</span></li>
+      <li><b>Retrieve memory</b><span>Atlas Vector Search, filtered by status, role and expiry</span></li>
+      <li><b>Claude plans</b><span>one aggregation pipeline, or a published skill</span></li>
+      <li><b>Guard</b><span>allowlisted stages, hidden fields blocked, row filter first</span></li>
+      <li><b>MongoDB runs it</b><span>only on rows the user may see</span></li>
+      <li><b>Claude explains</b><span>names the definition and version used</span></li>
+      <li><b>Saved and audited</b><span>session turn without result rows, plus an audit event</span></li>
+    </ol>
+  </section>
+
+  <!-- 5 -->
+  <section data-1min data-short class="slide">
+    <div class="kicker">Live · who can see what</div>
+    <h2>Same question, three roles, three correct answers</h2>
+    <div class="roles">
+      <div class="role"><b>Fatima</b><span>Finance lead · all rows · reviewer</span></div>
+      <div class="role"><b>Alex</b><span>Analyst · all rows · no supplier cost</span></div>
+      <div class="role"><b>Sam</b><span>East store manager · East only · no supplier cost</span></div>
+    </div>
+    <p class="note">"Return rate by region in Q3" runs once per role. Sam's answer covers East only, because the guard adds his row filter before the query runs.</p>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="Return rate by region in Q3" data-run="roles">Run across all roles</button>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide">
+    <div class="kicker">Live · the guard</div>
+    <h2>Hidden fields stay hidden, even from the agent</h2>
+    <p class="note">Sam asks for supplier cost. The agent never sees the field, the guard rejects any query that references it, and the refusal is audited.</p>
+    <div class="actions">
+      <button class="live" data-user="sam" data-q="What is our supplier cost for footwear?" data-run="ask">Ask as Sam</button>
+      <button class="live secondary" data-user="fatima" data-tab="audit">Open the audit log</button>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section data-short class="slide">
+    <div class="kicker">Live · memory changes the answer</div>
+    <h2>A wrong definition in shared memory spreads to everyone</h2>
+    <div class="defn bad"><span class="chip">Net margin v10 · active</span>(revenue − supplier cost) / revenue. Returns are ignored.</div>
+    <p class="note">With memory, every agent follows it: East's Q3 net margin looks like <b>36.1%</b>, only a few points behind the other regions.</p>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="What was net margin by region in Q3?" data-run="replay">Compare with and without memory</button>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section data-short class="slide">
+    <div class="kicker">Live · the correction</div>
+    <h2>A correction becomes a proposal, not a silent edit</h2>
+    <ol class="steps">
+      <li>Fatima says net margin must subtract returns. The agent answers with her definition and proposes a new version.</li>
+      <li>The proposal is <b>pending</b>: no agent uses it yet.</li>
+      <li>In Memory review, the reviewer approves it for every role. The old version is superseded, and both steps are audited.</li>
+    </ol>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="Net margin must subtract returns. Show Q3 by region again" data-run="ask">Make the correction</button>
+      <button class="live secondary" data-user="fatima" data-tab="reviewer">Open Memory review</button>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section data-1min data-short class="slide">
+    <div class="kicker">Live · after approval</div>
+    <h2>One approval fixes every agent's answer</h2>
+    <div class="bigcompare">
+      <div><span class="label">East Q3 net margin, before</span><span class="big muted-num">36.1%</span><span class="muted">returns ignored</span></div>
+      <div class="arrow">→</div>
+      <div><span class="label">after the approved correction</span><span class="big bad-num">1.7%</span><span class="muted">East's 34.9% return rate eats the margin</span></div>
+    </div>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-q="What was net margin by region in Q3?" data-run="ask">Ask again</button>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section data-1min data-short class="slide">
+    <div class="kicker">Proof from real runs</div>
+    <h2>The eval: same questions, with and without shared memory</h2>
+    <table class="eval">
+      <thead><tr><th>Eval, 5 questions × 2 runs</th><th>Without memory</th><th>With memory</th></tr></thead>
+      <tbody>
+        <tr><td>Before the correction</td><td>8 / 10</td><td class="bad-num">4 / 10</td></tr>
+        <tr><td>After the correction is approved</td><td>8 / 10</td><td class="ok-num">10 / 10</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Without memory, "sales growth" is measured on gross revenue and misses. With memory it uses the agreed net revenue definition. The wrong net margin fails every margin question until the correction is approved.</p>
+    <p class="muted small">From <code>python -m scripts.run_eval --runs 2</code> against the shared Atlas cluster.</p>
+  </section>
+
+  <!-- 11 -->
+  <section class="slide">
+    <div class="kicker">Live · skills</div>
+    <h2>Repeated analyses become tested skills</h2>
+    <ol class="steps">
+      <li>Answered questions become <b>episodes</b>: the question pattern, its parameters and its pipeline.</li>
+      <li>Similar episodes form a <b>cluster</b>. Three episodes from two users make it ready.</li>
+      <li>A draft skill is tested for replay and permissions, then the reviewer publishes it.</li>
+      <li>A skill stores logic, never results, so it always runs with the asker's permissions. Approving a new metric version marks skills built on the old one as stale.</li>
+    </ol>
+    <p class="muted small">Episodes in this demo come from sample activity, labeled as such in the interface.</p>
+    <div class="actions">
+      <button class="live" data-user="fatima" data-tab="skills">Open Skills</button>
+      <button class="live secondary" data-user="alex" data-q="Return rate by category in September" data-run="ask">Ask a question a skill covers</button>
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="slide">
+    <h2>Built on MongoDB Atlas</h2>
+    <div class="grid2">
+      <div class="card"><h3>Vector Search with filters</h3><p>Memory retrieval filters by status, role and expiry inside <code>$vectorSearch</code>, then code checks every rule again.</p></div>
+      <div class="card"><h3>Aggregation, guarded</h3><p>The agent writes pipelines; an allowlist, a row filter <code>$match</code> and an <code>$unset</code> of hidden fields wrap every one.</p></div>
+      <div class="card"><h3>Change streams</h3><p>The learning worker watches answered session turns and turns them into episodes.</p></div>
+      <div class="card"><h3>One cluster, every record</h3><p>Sales, memories, sessions, episodes, skills and the audit log live side by side.</p></div>
+    </div>
+    <p class="muted small">Embeddings: Voyage voyage-4 · Planning and explaining: Claude</p>
+  </section>
+
+  <!-- 13 -->
+  <section data-short class="slide slide-title">
+    <h2 class="logo-l">Thank you</h2>
+    <div class="team">
+      <div><b>Jimmy</b><span>Data and access</span></div>
+      <div><b>Paul</b><span>Analyst agent</span></div>
+      <div><b>Chloe</b><span>Memory governance</span></div>
+      <div><b>Yue</b><span>Skills and interface</span></div>
+    </div>
+    <div class="actions center">
+      <button class="live" data-user="fatima" data-tab="analyst">Open Lore</button>
+    </div>
+  </section>
+
+</main>
+
+<nav class="controls" aria-label="Slide controls">
+  <button id="prev" aria-label="Previous slide">←</button>
+  <span id="counter">1 / 1</span>
+  <span id="timer" title="Starts when you leave the first slide · R resets">0:00 / 3:00</span>
+  <button id="next" aria-label="Next slide">→</button>
+  <span class="hint">← → to move · L to go live · Esc to come back · F for full screen · R resets the timer · a live run stays open until you start a different one</span>
+</nav>
+
+<div id="live" class="live-overlay" hidden>
+  <div class="live-bar">
+    <span class="live-dot"></span><span id="live-title">Live demo</span>
+    <button id="live-close">Back to slides <kbd>Esc</kbd></button>
+  </div>
+  <iframe id="live-frame" title="Lore live demo"></iframe>
+</div>
+
+<script src="/static/demo.js"></script>
+</body>
+</html>

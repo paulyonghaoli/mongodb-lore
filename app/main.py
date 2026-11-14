@@ -28,3 +28,9 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(WEB / "index.html")
+
+
+@app.get("/demo", include_in_schema=False)
+def demo() -> FileResponse:
+    """Presentation deck for the demo; its live buttons open the app above the slides."""
+    return FileResponse(WEB / "demo.html")
