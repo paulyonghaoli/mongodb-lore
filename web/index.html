@@ -38,7 +38,10 @@
       <button type="button" class="secondary" id="replay-btn" title="Runs the question twice: once without memory, once with it">With and without memory</button>
       <button type="button" class="secondary" id="roles-btn" title="Sends the question once per user, each with that user's own permissions">Across all roles</button>
     </div>
-    <div class="examples" id="examples"><span class="muted small">Examples</span></div>
+    <details class="templates" id="templates" open>
+      <summary>Question templates <span class="muted">· click one to fill the box; a name means it signs in as that user</span></summary>
+      <div id="template-groups"></div>
+    </details>
     <div class="muted small session">Session <code id="session-id">new</code> · <a href="#" id="new-session">start a new session</a></div>
     <div id="results" class="results"></div>
   </section>

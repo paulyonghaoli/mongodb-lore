@@ -8,12 +8,27 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 
 const ROLE_LABELS = { finance_lead: "Finance lead", analyst: "Analyst", store_manager: "Store manager" };
 const roleLabel = (r) => ROLE_LABELS[r] || r;
-const EXAMPLES = [
-  "Return rate by category in September",
-  "Sales growth by region, August to September",
-  "What was net margin by region in Q3?",
-  "Which of my stores lost margin since July?",
-  "What is our supplier cost for footwear?",
+// The questions most likely to be asked in the demo, grouped by what they show. Edit this list to
+// change the templates on the Analyst view. `as` is the user a question is written for: clicking it
+// signs in as that user first. Without `as`, the question is asked as whoever is signed in.
+const TEMPLATES = [
+  { group: "Memory changes the answer", hint: "Then use Compare: With and without memory", items: [
+    { q: "What was net margin by region in Q3?" },
+    { q: "Net margin must subtract returns. Show Q3 by region again", as: "fatima" },
+    { q: "Which region had the weakest margin last quarter?" },
+    { q: "What were October sales by region, on the basis we use for Q4 targets?" },
+  ] },
+  { group: "Who can see what", hint: "Then use Compare: Across all roles", items: [
+    { q: "Return rate by region in Q3" },
+    { q: "Which of my stores lost margin since July?", as: "sam" },
+    { q: "What is our supplier cost for footwear?", as: "sam" },
+    { q: "Why is footwear margin lower than other categories?", as: "fatima" },
+  ] },
+  { group: "Repeated analyses", hint: "Answered questions like these become episodes, and then a skill", items: [
+    { q: "Return rate by category in September" },
+    { q: "Return rate by category in October" },
+    { q: "Sales growth by region, August to September" },
+  ] },
 ];
 
 const state = {
@@ -401,10 +416,30 @@ $("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); runQuesti
 $("#replay-btn").addEventListener("click", () => runQuestion("replay"));
 $("#roles-btn").addEventListener("click", () => runQuestion("roles"));
 $("#new-session").addEventListener("click", (e) => { e.preventDefault(); resetSession(); });
-$("#examples").insertAdjacentHTML("beforeend", EXAMPLES.map((q) => `<button type="button" class="example">${esc(q)}</button>`).join(""));
-$("#examples").addEventListener("click", (e) => {
-  const b = e.target.closest(".example");
-  if (b) { $("#question").value = b.textContent; $("#question").focus(); }
+// ---------- analyst: question templates ----------
+function renderTemplates() {
+  const known = (id) => state.users.some((u) => u.user_id === id);
+  $("#template-groups").innerHTML = TEMPLATES.map((g) => `<div class="template-group">
+    <span class="template-label" title="${esc(g.hint)}">${esc(g.group)}</span>
+    <div class="template-items">${g.items.map((t) => `<button type="button" class="template" data-q="${esc(t.q)}"${
+      t.as && known(t.as) ? ` data-as="${esc(t.as)}" title="Signs in as ${esc(userName(t.as))} and fills the question"><span class="who">${esc(userName(t.as))}</span>`
+        : ' title="Fills the question for the signed-in user">'}${esc(t.q)}</button>`).join("")}</div>
+  </div>`).join("");
+}
+$("#template-groups").addEventListener("click", (e) => {
+  const b = e.target.closest(".template");
+  if (!b) return;
+  if (b.dataset.as && b.dataset.as !== state.me.user_id) {
+    setUser(b.dataset.as);
+    toast(`Now signed in as ${state.me.display_name}`);
+  }
+  $("#question").value = b.dataset.q;
+  $("#question").focus();
+});
+// Remember whether the presenter folded the templates away
+try { if (localStorage.getItem("lore.templates") === "closed") $("#templates").open = false; } catch { /* storage unavailable */ }
+$("#templates").addEventListener("toggle", (e) => {
+  try { localStorage.setItem("lore.templates", e.target.open ? "open" : "closed"); } catch { /* storage unavailable */ }
 });
 $("#results").addEventListener("click", (e) => { const b = e.target.closest("[data-goto]"); if (b) showTab(b.dataset.goto); });
 
@@ -724,6 +759,7 @@ async function init() {
   state.users = await fetch("/api/users").then((r) => r.json());
   $("#user").innerHTML = state.users.map((u) => `<option value="${esc(u.user_id)}">${esc(u.display_name)}</option>`).join("");
   $("#user").addEventListener("change", (e) => setUser(e.target.value));
+  renderTemplates();
   $$(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
   window.addEventListener("hashchange", () => { if (location.hash.slice(1) !== state.tab) showTab(location.hash.slice(1)); });
   state.tab = location.hash.slice(1) || "analyst";
