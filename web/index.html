@@ -4,70 +4,95 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lore</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2300684a'/><text x='16' y='23' font-size='20' font-family='Georgia,serif' text-anchor='middle' fill='white'>L</text></svg>">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="brand"><strong>Lore</strong> <span class="muted">governed memory for analyst agents</span></div>
-  <label>Signed in as
+<header class="topbar">
+  <div class="brand"><span class="logo">Lore</span><span class="tagline">Governed shared memory for analyst agents</span></div>
+  <div class="identity">
+    <label for="user" class="muted small">Signed in as</label>
     <select id="user"></select>
-  </label>
+    <div id="identity" class="identity-tags"></div>
+  </div>
 </header>
 
-<nav>
+<nav class="tabs">
   <button class="tab active" data-tab="analyst">Analyst</button>
-  <button class="tab" data-tab="reviewer">Reviewer</button>
+  <button class="tab" data-tab="reviewer">Memory review <span id="pending-badge" class="count hidden"></span></button>
+  <button class="tab" data-tab="skills">Skills</button>
   <button class="tab" data-tab="audit">Audit log</button>
 </nav>
 
 <main>
-  <!-- Analyst view -->
+  <!-- Analyst view: ask, see the permissions and memory behind the answer, compare runs -->
   <section id="analyst" class="panel">
-    <form id="ask-form">
-      <input id="question" placeholder="Ask a business question, e.g. What was net margin by region in Q3?" autocomplete="off">
-      <label class="check"><input type="checkbox" id="use-memory" checked> Use shared memory</label>
-      <button type="submit">Ask</button>
-      <button type="button" id="replay">Compare with and without memory</button>
+    <form id="ask-form" class="ask">
+      <input id="question" placeholder="Ask a business question, e.g. Return rate by category in September" autocomplete="off">
+      <button type="submit" id="ask-btn">Ask</button>
     </form>
-    <div class="muted small">Session <span id="session-id">new</span> · <a href="#" id="new-session">start new session</a></div>
-    <div id="results"></div>
+    <div class="ask-options">
+      <label class="check"><input type="checkbox" id="use-memory" checked> Use shared memory</label>
+      <span class="divider"></span>
+      <span class="muted small">Compare</span>
+      <button type="button" class="secondary" id="replay-btn" title="Runs the question twice: once without memory, once with it">With and without memory</button>
+      <button type="button" class="secondary" id="roles-btn" title="Sends the question once per user, each with that user's own permissions">Across all roles</button>
+    </div>
+    <div class="examples" id="examples"><span class="muted small">Examples</span></div>
+    <div class="muted small session">Session <code id="session-id">new</code> · <a href="#" id="new-session">start a new session</a></div>
+    <div id="results" class="results"></div>
   </section>
 
-  <!-- Reviewer view -->
+  <!-- Reviewer view: every memory by status, with approve, reject, expire and forget -->
   <section id="reviewer" class="panel hidden">
-    <h2>Memories</h2>
-    <div class="row">
-      <label>Status
-        <select id="mem-status">
-          <option value="">all</option><option>pending</option><option>active</option>
-          <option>superseded</option><option>expired</option><option>forgotten</option><option>rejected</option>
-        </select>
-      </label>
-      <button id="mem-refresh" type="button">Refresh</button>
+    <div class="section-head">
+      <h2>Shared memory</h2>
+      <button type="button" class="secondary" id="mem-refresh">Refresh</button>
     </div>
-    <table id="mem-table"><thead><tr>
-      <th>ID</th><th>Title</th><th>Version</th><th>Status</th><th>Visible to</th><th>Content</th><th>Source</th><th>Actions</th>
-    </tr></thead><tbody></tbody></table>
-
-    <h2>Skills</h2>
-    <div class="row">
-      <button id="skills-refresh" type="button">Refresh</button>
-      <button id="skills-generate" type="button">Draft skill from a ready cluster</button>
-    </div>
-    <h3>Episode clusters</h3>
-    <table id="cluster-table"><thead><tr><th>Cluster</th><th>Intent</th><th>Episodes</th><th>Users</th><th>Ready</th></tr></thead><tbody></tbody></table>
-    <h3>Skill library</h3>
-    <table id="skill-table"><thead><tr>
-      <th>Name</th><th>Version</th><th>Status</th><th>Description</th><th>Required fields</th><th>Tests</th><th>Actions</th>
-    </tr></thead><tbody></tbody></table>
+    <p id="mem-note" class="muted small"></p>
+    <div id="mem-filters" class="pills"></div>
+    <div id="mem-list" class="list"></div>
   </section>
 
-  <!-- Audit -->
+  <!-- Skills: episode clusters and the skill library -->
+  <section id="skills" class="panel hidden">
+    <div class="section-head">
+      <h2>Skills from repeated analyses</h2>
+      <button type="button" class="secondary" id="skills-refresh">Refresh</button>
+    </div>
+    <p class="muted small">Answered questions are distilled into episodes. A cluster is ready at three similar episodes from two people.
+      A reviewer drafts a skill from a ready cluster, and it must pass its tests before it can be published.
+      A skill stores the method, never results, so it always runs with the caller's permissions.</p>
+    <h3>Episode clusters</h3>
+    <div id="cluster-list" class="list"></div>
+    <h3>Skill library</h3>
+    <div id="skill-list" class="list"></div>
+  </section>
+
+  <!-- Audit log -->
   <section id="audit" class="panel hidden">
-    <div class="row"><button id="audit-refresh" type="button">Refresh</button></div>
-    <table id="audit-table"><thead><tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody></tbody></table>
+    <div class="section-head">
+      <h2>Audit log</h2>
+      <button type="button" class="secondary" id="audit-refresh">Refresh</button>
+    </div>
+    <p id="audit-note" class="muted small"></p>
+    <div id="audit-filters" class="pills"></div>
+    <div id="audit-list"></div>
   </section>
 </main>
+
+<dialog id="dialog">
+  <form id="dialog-form" method="dialog">
+    <h3 id="dialog-title"></h3>
+    <div id="dialog-body"></div>
+    <p id="dialog-error" class="error small hidden"></p>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" id="dialog-cancel">Cancel</button>
+      <button type="submit" id="dialog-confirm">Confirm</button>
+    </div>
+  </form>
+</dialog>
+<div id="toasts"></div>
 
 <script src="/static/app.js"></script>
 </body>
