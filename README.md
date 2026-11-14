@@ -11,19 +11,66 @@ Demo company: **Northwind Outfitters**, 20 stores in 4 regions, synthetic data.
 
 ## Quick start
 
+Python 3.12 or newer.
+
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env        # fill in MONGODB_URI, ANTHROPIC_API_KEY, VOYAGE_API_KEY
+```
+
+**The database is already loaded** (the team's shared Sandbox): start the app and open it.
+
+```bash
+uvicorn app.main:app --reload               # http://localhost:8000
+```
+
+**The database is empty** (your own cluster): load it once, then start the app as above.
+
+```bash
 python -m scripts.generate_sales --drop     # ~243k sales docs (add --products-per-category 3 for a small set)
 python -m scripts.setup_indexes             # regular + memory_vec / episode_vec Vector Search indexes
 python -m scripts.seed_memories --reset     # starting memories, incl. the deliberately wrong net margin
-uvicorn app.main:app --reload               # http://localhost:8000
-python -m app.workers.learning              # optional: turns sessions into episodes (change stream)
+python -m scripts.synthesize_activity       # optional: sample sessions, memories and episodes, flagged `synthetic`
+python -m scripts.check_data                # optional: checks the sales data against the contracts
+```
+
+`--drop` replaces the `sales` collection, and `--reset` clears memories, sessions, episodes, skills and the
+audit log. Never run either against a database other people are using.
+
+Optional, either way:
+
+```bash
+python -m app.workers.learning              # turns answered sessions into episodes (change stream)
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
 
 Offline dev without Atlas or Voyage: set `EMBEDDING_PROVIDER=hash` and `VECTOR_BACKEND=local`, and point
 `MONGODB_URI` at a local `mongod`.
+
+## Using the interface
+
+Open http://localhost:8000. Choose who you are under **Signed in as** (top right). The tags beside it show
+that user's role, row filter and hidden fields, and every request is sent as that user.
+
+| Tab | What it is for |
+| --- | --- |
+| Analyst | Ask a question. The card shows the answer, the rows, the permissions applied and the memory in context. |
+| Memory review | Every memory by status. The reviewer (Fatima) approves, rejects, expires and forgets. Other users see only the memories visible to their role. |
+| Skills | Episode clusters and the skill library. The reviewer drafts a skill from a ready cluster, then publishes or retires it. |
+| Audit log | Every query and every change to memory or skills. The reviewer sees all events, other users their own. |
+
+The **Question templates** under the ask box hold the demo questions; a template with a name on it signs in
+as that user first. Three to try:
+
+1. *Return rate by region in Q3*, then **Across all roles**: the store manager's answer covers East only.
+2. *Why did East's return rate rise in Q3?*, then **Across all roles**: the East return window memory reaches
+   the finance lead and the store manager, and not the analyst.
+3. *What were October sales by region, on the basis we use for Q4 targets?*, then **With and without memory**:
+   with memory the agent applies the Q4 targets basis, and without it there is no agreed basis to use.
+
+Steps 2 and 3 rely on memories that `scripts.synthesize_activity` creates. The interface marks those records
+as sample data.
 
 ## How a question flows
 
@@ -54,8 +101,9 @@ app/
   skills.py          episodes, clustering, skill drafting/testing/publishing
   workers/learning.py   change-stream worker: session turn -> episode
   routes/            ask.py, memories.py, skills.py, audit.py (one router per workstream)
-web/                 index.html, app.js, style.css: analyst, reviewer and audit views
-scripts/             generate_sales, setup_indexes, seed_memories, expected_answers, run_eval
+web/                 index.html, app.js, style.css: analyst, memory review, skills and audit views
+scripts/             generate_sales, setup_indexes, seed_memories, synthesize_activity, check_data,
+                     expected_answers, run_eval
 tests/               guard, memory governance and skills tests (offline)
 ```
 
@@ -98,6 +146,7 @@ Checkpoint: by **1:00 PM**, two roles get correctly different answers from the s
 - **Proposal visibility.** The contracts say a user cannot propose wider visibility than their own role.
   Current rule: non-reviewers propose for their own role only, and the reviewer can widen it on approve
   (`memory.propose`). Confirm with the team.
-- **`/api/replay`** is an addition for the interface; the contract replay (calling `/api/ask` twice) still works.
+- **`/api/replay`** is a convenience route. The interface runs the contract replay itself: two `/api/ask`
+  calls in parallel, one with `use_memory: false`, each in a new session.
 - **Vector Search filter on `expires_at: null`** needs checking on the Sandbox; retrieval re-checks
   expiry in code either way.
