@@ -922,6 +922,15 @@ async function init() {
   $$(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
   window.addEventListener("hashchange", () => { if (location.hash.slice(1) !== state.tab) showTab(location.hash.slice(1)); });
   state.tab = location.hash.slice(1) || "analyst";
-  setUser(new URLSearchParams(location.search).get("user"));
+  const params = new URLSearchParams(location.search);
+  setUser(params.get("user"));
+  // Deep links from the demo deck (/demo): ?q= fills the question, &run=ask|replay|roles runs it.
+  // syncUrl() has already dropped both from the address, so a reload does not run it again.
+  const q = params.get("q");
+  if (q && state.tab === "analyst") {
+    $("#question").value = q;
+    const run = params.get("run");
+    if (["ask", "replay", "roles"].includes(run)) runQuestion(run);
+  }
 }
 init();
