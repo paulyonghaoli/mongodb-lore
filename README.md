@@ -39,6 +39,7 @@ python -m scripts.seed_memories --reset     # starting memories, incl. the delib
 uvicorn app.main:app --reload               # http://localhost:8000
 python -m app.workers.learning              # optional: turns newly answered questions into episodes (change stream)
 python -m app.workers.learning --backlog    # the same, plus older questions never processed (one model call each)
+python -m app.workers.learning --auto-draft # the same, and drafts a skill when a new episode lands in a ready cluster
 python -m scripts.monthly_memory_review     # previous month; creates reviewer queues and pending memory proposals
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
@@ -123,7 +124,7 @@ All calls send `X-User: fatima | alex | sam`.
 | POST | `/api/memory-review/items/{item_id}/delete` · `/retain` | Reviewer confirms query deletion / memory forgetting, or keeps the item |
 | GET | `/api/skills` · `/api/skills/clusters` | Skill library and episode clusters |
 | GET | `/api/skills/clusters/{id}/episodes` · `/api/skills/learning` | The questions behind a cluster (reviewer only); what became of answered turns |
-| POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (manual trigger), publish, retire |
+| POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (reviewer; the worker can also draft with `--auto-draft`), publish, retire |
 | GET | `/api/audit` | Recent audit events (reviewers see all; others see their own) |
 
 ## Workstreams
