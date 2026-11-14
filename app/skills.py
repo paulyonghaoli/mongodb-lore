@@ -14,7 +14,7 @@ from bson import json_util
 from fastapi import HTTPException
 
 from . import audit, db, embeddings, llm
-from .guard import GuardError, find_hidden_references, guard_pipeline
+from .guard import GuardError, find_hidden_references, guard_pipeline, validate
 from .models import UserContext
 
 SIMILARITY_THRESHOLD = 0.80
@@ -41,7 +41,22 @@ def _public(doc: dict) -> dict:
 # ---------- reading / using skills ----------
 
 def list_all() -> list[dict]:
-    return [_public(d) for d in db.app_db()[db.SKILLS].find().sort([("name", 1), ("version", -1)])]
+    return _with_sources([_public(d) for d in db.app_db()[db.SKILLS].find().sort([("name", 1), ("version", -1)])])
+
+
+def _with_sources(found: list[dict]) -> list[dict]:
+    """Say where each skill came from: how many episodes, whose, how many are sample data, one question to try."""
+    ids = list({i for s in found for i in s.get("source_episodes", [])})
+    episodes = {e["episode_id"]: e for e in db.app_db()[db.EPISODES].find(
+        {"episode_id": {"$in": ids}}, {"episode_id": 1, "user_id": 1, "turn_id": 1, "synthetic": 1})}
+    for s in found:
+        mine = [episodes[i] for i in s.get("source_episodes", []) if i in episodes]
+        s["sources"] = {"episodes": len(s.get("source_episodes", [])),
+                        "users": sorted({e["user_id"] for e in mine}),
+                        "sample": sum(1 for e in mine if e.get("synthetic"))}
+        turn = db.app_db()[db.SESSIONS].find_one({"turn_id": mine[0]["turn_id"]}, {"question": 1}) if mine else None
+        s["example_question"] = turn.get("question") if turn else None
+    return found
 
 
 def offered_to(user: UserContext) -> list[dict]:
@@ -203,17 +218,47 @@ def _assign_cluster(ep: dict) -> str:
 
 
 def clusters() -> list[dict]:
-    pipeline = [
-        {"$group": {"_id": "$cluster_id", "episodes": {"$sum": 1},
-                    "users": {"$addToSet": "$user_id"}, "intent": {"$first": "$intent"}}},
-        {"$sort": {"episodes": -1}},
-    ]
-    out = []
-    for c in db.app_db()[db.EPISODES].aggregate(pipeline):
-        ready = c["episodes"] >= READY_EPISODES and len(c["users"]) >= READY_USERS
-        out.append({"cluster_id": c["_id"], "episodes": c["episodes"], "users": c["users"],
-                    "intent": c["intent"], "ready": ready})
+    """Episode clusters, largest first, with what they share and whether a skill may be drafted."""
+    groups: dict[str, dict] = {}
+    fields = {"cluster_id": 1, "user_id": 1, "intent": 1, "structure": 1, "synthetic": 1}
+    for e in db.app_db()[db.EPISODES].find({}, fields):
+        g = groups.setdefault(e["cluster_id"], {
+            "cluster_id": e["cluster_id"], "episodes": 0, "users": [], "intent": e["intent"],
+            "structure": e.get("structure"), "sample": 0, "skills": []})
+        g["episodes"] += 1
+        g["sample"] += 1 if e.get("synthetic") else 0  # written by scripts/synthesize_activity.py
+        if e["user_id"] not in g["users"]:
+            g["users"].append(e["user_id"])
+    for sk in db.app_db()[db.SKILLS].find({"cluster_id": {"$in": list(groups)}},
+                                           {"cluster_id": 1, "name": 1, "version": 1, "status": 1}).sort("version", -1):
+        groups[sk["cluster_id"]]["skills"].append({k: sk[k] for k in ("name", "version", "status")})
+    out = sorted(groups.values(), key=lambda g: -g["episodes"])
+    for g in out:
+        g["ready"] = g["episodes"] >= READY_EPISODES and len(g["users"]) >= READY_USERS
     return out
+
+
+def cluster_episodes(cluster_id: str, limit: int = 50) -> list[dict]:
+    """The episodes of one cluster, newest first, with the question each came from. Never result rows."""
+    found = list(db.app_db()[db.EPISODES].find({"cluster_id": cluster_id}, {"embedding": 0})
+                 .sort("created_at", -1).limit(limit))
+    questions = {t["turn_id"]: t.get("question") for t in db.app_db()[db.SESSIONS].find(
+        {"turn_id": {"$in": [e["turn_id"] for e in found]}}, {"turn_id": 1, "question": 1})}
+    return [{"episode_id": e["episode_id"], "turn_id": e["turn_id"], "user_id": e["user_id"],
+             "question": questions.get(e["turn_id"]), "parameters": e.get("parameters", {}),
+             "created_at": e.get("created_at"), "sample": bool(e.get("synthetic"))} for e in found]
+
+
+def learning_status() -> dict:
+    """How far the learning worker is: answered turns by what became of them."""
+    counts = {"extracted": 0, "skipped": 0, "rejected": 0, "error": 0, "processing": 0, "waiting": 0}
+    for t in db.app_db()[db.SESSIONS].find({"outcome": {"$in": ["answered", "user_confirmed"]}}, {"episode_status": 1}):
+        status = t.get("episode_status")
+        key = status.split(":", 1)[0] if status else "waiting"
+        counts[key] = counts.get(key, 0) + 1
+    live = db.app_db()[db.EPISODES].find_one({"synthetic": {"$ne": True}}, {"created_at": 1}, sort=[("created_at", -1)])
+    return {**counts, "live_episodes": db.app_db()[db.EPISODES].count_documents({"synthetic": {"$ne": True}}),
+            "last_live_episode_at": live.get("created_at") if live else None}
 
 
 # ---------- drafting and testing ----------
@@ -239,49 +284,155 @@ SKILL_RULES = """You turn several similar analyses into one reusable MongoDB agg
 Keep the method of the source pipelines exactly; only replace the specific values."""
 
 
-def _round(v: Any) -> Any:
-    if isinstance(v, float):
-        return round(v, 2)
-    if isinstance(v, dict):
-        return {k: _round(x) for k, x in v.items()}
-    if isinstance(v, list):
-        return [_round(x) for x in v]
-    return v
+MAX_DRAFT_EPISODES = 6   # how many episodes the model sees when it drafts
+REPLAY_EPISODES = 3      # how many of those the replay test runs again
+NUMBER_TOLERANCE = 5e-4  # two results agree when their numbers differ by rounding only
+
+
+def _sample(episodes: list[dict], n: int) -> list[dict]:
+    """Up to n episodes, newest first, taking users in turn so the sample covers more than one person."""
+    def when(e: dict) -> datetime:
+        t = e.get("created_at") or datetime.min
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+    by_user: dict[str, list[dict]] = {}
+    for e in sorted(episodes, key=when, reverse=True):
+        by_user.setdefault(e["user_id"], []).append(e)
+    picked: list[dict] = []
+    while len(picked) < n and any(by_user.values()):
+        for queue in by_user.values():
+            if queue and len(picked) < n:
+                picked.append(queue.pop(0))
+    return picked
+
+
+def _placeholders(node: Any) -> set[str]:
+    if isinstance(node, dict):
+        return {name for v in node.values() for name in _placeholders(v)}
+    if isinstance(node, list):
+        return {name for v in node for name in _placeholders(v)}
+    if isinstance(node, str):
+        m = re.fullmatch(r"\{\{(\w+)\}\}", node)
+        return {m.group(1)} if m else set()
+    return set()
+
+
+def _parse_draft(raw: dict) -> tuple[dict, list]:
+    """Check the model's draft before anything is saved. Raises 422 with a reason a reviewer can read."""
+    try:
+        parameters = json.loads(raw.get("parameters_json") or "{}")
+        template = json.loads(raw.get("pipeline_template_json") or "")
+    except (TypeError, ValueError):
+        raise HTTPException(422, "The draft could not be read: the model did not return valid JSON. Try again.")
+    if not isinstance(parameters, dict) or not isinstance(template, list):
+        raise HTTPException(422, "The draft could not be read: parameters must be an object and the template a list.")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{2,63}", raw.get("name") or ""):
+        raise HTTPException(422, f"The draft's name {raw.get('name')!r} is not snake_case. Try again.")
+    used = _placeholders(template)
+    if used != set(parameters):
+        raise HTTPException(422, f"The draft declares parameters {sorted(parameters)} "
+                                 f"but its template uses {sorted(used)}. Try again.")
+    try:
+        validate("sales", render(template, {name: "x" for name in used}))
+    except GuardError as e:
+        raise HTTPException(422, f"The draft's query is not allowed: {e.reason}")
+    return parameters, template
 
 
 def _run(user: UserContext, pipeline: list[dict]) -> list[dict]:
     safe, _ = guard_pipeline(user, "sales", pipeline)
-    return _round(list(db.business_db()["sales"].aggregate(safe)))
+    return list(db.business_db()["sales"].aggregate(safe))
 
 
-def _test(skill: dict, episodes: list[dict]) -> dict:
-    from .users import all_users
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
-    template = json_util.loads(skill["pipeline_template"])
-    replay = "pass"
-    for ep in episodes[:3]:
+
+def _by_label(rows: list[dict]) -> dict[tuple, list[list[float]]]:
+    """Result rows keyed by their labels (the group values), each reduced to its numbers."""
+    out: dict[tuple, list[list[float]]] = {}
+    for row in rows:
+        labels = tuple(sorted(str(v) for v in row.values() if v is not None and not _is_number(v)))
+        out.setdefault(labels, []).append(sorted(float(v) for v in row.values() if _is_number(v)))
+    return out
+
+
+def _numbers_agree(a: list[float], b: list[float]) -> bool:
+    """Every number of the shorter row appears in the longer one, so extra helper columns are allowed."""
+    small, large = (a, list(b)) if len(a) <= len(b) else (b, list(a))
+    if not small:
+        return not large
+    for x in small:
+        match = next((y for y in large if abs(x - y) <= max(NUMBER_TOLERANCE, 1e-6 * abs(y))), None)
+        if match is None:
+            return False
+        large.remove(match)
+    return True
+
+
+def compare_results(expected: list[dict], actual: list[dict]) -> str | None:
+    """None when two results say the same thing, otherwise what differs.
+
+    Rows are matched on their labels. Column names, column order and row order are ignored, because
+    two people's queries for the same analysis rarely agree on those. The numbers must agree.
+    """
+    want, got = _by_label(expected), _by_label(actual)
+    if set(want) != set(got):
+        missing, extra = sorted(set(want) - set(got)), sorted(set(got) - set(want))
+        return f"different rows: {len(missing)} missing, {len(extra)} unexpected"
+    for labels, rows in want.items():
+        others = got[labels]
+        if len(rows) != len(others) or not all(_numbers_agree(x, y) for x, y in zip(sorted(rows), sorted(others))):
+            return f"different numbers for {', '.join(labels) or 'the total'}"
+    return None
+
+
+def _replay_test(template: list, episodes: list[dict]) -> list[dict]:
+    """Run each source query and the filled-in template with full access: they must give the same result."""
+    details = []
+    for ep in episodes[:REPLAY_EPISODES]:
+        entry = {"episode_id": ep["episode_id"], "user_id": ep["user_id"], "parameters": ep["parameters"]}
         try:
             expected = _run(_TESTER, json_util.loads(ep["pipeline"]))
             actual = _run(_TESTER, render(template, ep["parameters"]))
-            if expected != actual:
-                replay = "fail"
-        except Exception:
-            replay = "fail"
+            problem = compare_results(expected, actual)
+            entry.update(result="fail" if problem else "pass", rows=len(actual), reason=problem)
+        except Exception as e:
+            entry.update(result="fail", rows=0, reason=str(e)[:200])
+        details.append(entry)
+    return details
 
-    permissions = "pass"
-    sample_params = episodes[0]["parameters"]
+
+def _permission_test(skill: dict, template: list, params: dict) -> list[dict]:
+    """Run the skill as every user it is offered to: each must get the full result cut down to their rows."""
+    from .users import all_users
+
+    details = []
     for user in all_users().values():
-        hidden_needed = set(skill["required_fields"]) & set(user.hidden_fields)
-        if hidden_needed:
-            continue  # never offered to this user (checked by offered_to)
-        try:
-            rows = _run(user, render(template, sample_params))
-            if user.rows and rows and any(
-                k in r and r[k] != v for r in rows for k, v in user.rows.items()):
-                permissions = "fail"
-        except GuardError:
-            permissions = "fail"
-    return {"replay": replay, "permissions": permissions}
+        entry: dict[str, Any] = {"user_id": user.user_id, "role": user.role}
+        hidden = sorted(set(skill["required_fields"]) & set(user.hidden_fields))
+        if hidden:
+            entry.update(result="not offered", reason=f"needs {', '.join(hidden)}")
+        else:
+            try:
+                row_filter = [{"$match": dict(user.rows)}] if user.rows else []
+                allowed = _run(_TESTER, row_filter + render(template, params))
+                problem = compare_results(allowed, _run(user, render(template, params)))
+                entry.update(result="fail" if problem else "pass", reason=problem)
+            except Exception as e:
+                entry.update(result="fail", reason=str(e)[:200])
+        details.append(entry)
+    return details
+
+
+def _test(skill: dict, episodes: list[dict]) -> dict:
+    """Run both tests and keep the detail on the skill. The result keeps the contract shape."""
+    template = json_util.loads(skill["pipeline_template"])
+    replay = _replay_test(template, episodes)
+    permissions = _permission_test(skill, template, episodes[0]["parameters"])
+    skill["test_details"] = {"replay": replay, "permissions": permissions}
+    return {"replay": "pass" if replay and all(r["result"] == "pass" for r in replay) else "fail",
+            "permissions": "fail" if any(r["result"] == "fail" for r in permissions) else "pass"}
 
 
 def generate(cluster_id: str | None = None) -> dict:
@@ -292,12 +443,14 @@ def generate(cluster_id: str | None = None) -> dict:
         raise HTTPException(409, "No cluster is ready (needs 3 episodes from 2 users)")
     cluster = ready[0]
     episodes = list(db.app_db()[db.EPISODES].find({"cluster_id": cluster["cluster_id"]}))
+    # The model drafts from a recent sample: a cluster can hold dozens of near-identical episodes
+    sample = _sample(episodes, MAX_DRAFT_EPISODES)
 
     usage = llm.Usage()
     raw = llm.complete(SKILL_RULES, [{"role": "user", "content": json.dumps([
         {"intent": e["intent"], "parameters": e["parameters"], "method": e["method"],
-         "pipeline": e["pipeline"]} for e in episodes])}], usage, schema=SKILL_SCHEMA)
-    template = json.loads(raw["pipeline_template_json"])
+         "pipeline": e["pipeline"]} for e in sample])}], usage, schema=SKILL_SCHEMA)
+    parameters, template = _parse_draft(raw)
 
     from .agent import SALES_FIELDS
     required = find_hidden_references(template, list(SALES_FIELDS))
@@ -314,18 +467,19 @@ def generate(cluster_id: str | None = None) -> dict:
         "version": (latest["version"] + 1) if latest else 1,
         "status": "draft",
         "description": raw["description"],
-        "parameters": json.loads(raw["parameters_json"]),
+        "parameters": parameters,
         "pipeline_template": json_util.dumps(template),
         "required_fields": required,
         "metric_versions": metric_versions,
         "source_episodes": [e["episode_id"] for e in episodes],
+        "drafted_from": [e["episode_id"] for e in sample],
         "cluster_id": cluster["cluster_id"],
         "reviewed_by": None,
         "created_at": _now(),
     }
-    skill["test_results"] = _test(skill, episodes)
+    skill["test_results"] = _test(skill, sample)
     db.app_db()[db.SKILLS].insert_one(skill)
-    return _public(skill)
+    return _with_sources([_public(skill)])[0]
 
 
 def publish(reviewer: UserContext, name: str) -> dict:
