@@ -9,6 +9,11 @@ fields their role allows.
 
 Demo company: **Northwind Outfitters**, 20 stores in 4 regions, synthetic data.
 
+The net-margin memory-on/off demo uses `fatima` (finance lead), who can read `supplier_cost`.
+`alex` and `sam` remain restricted from that field; shared memory visibility never grants data access.
+Running `python -m scripts.seed_memories` without `--reset` also ensures the active baseline net-margin
+memory is visible to every demo role and adds the shared access decision memory.
+
 ## Quick start
 
 ```bash
