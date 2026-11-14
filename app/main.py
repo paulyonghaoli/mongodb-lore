@@ -5,13 +5,14 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .routes import ask, audit, memories, skills
+from .routes import ask, audit, memories, memory_review, skills
 
 WEB = Path(__file__).resolve().parent.parent / "web"
 
 app = FastAPI(title="Lore", description="Governed shared memory for analyst agents")
 app.include_router(ask.router)
 app.include_router(memories.router)
+app.include_router(memory_review.router)
 app.include_router(skills.router)
 app.include_router(audit.router)
 

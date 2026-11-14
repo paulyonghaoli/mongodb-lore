@@ -107,9 +107,10 @@ async function loadMemories() {
     }
     const extra = m.forgotten ? `<div class="muted small">forgotten by ${esc(m.forgotten.by)}: ${esc(m.forgotten.reason)}</div>` : "";
     return `<tr>
-      <td>${esc(m.memory_id)}</td><td>${esc(m.title)}</td><td>${m.version}</td>
+      <td>${esc(m.memory_id)}</td><td>${esc(m.title)}${m.source?.corrects_memory ? `<div class="muted small">corrects ${esc(m.source.corrects_memory)}</div>` : ""}</td><td>${m.version}</td>
       <td class="status-${esc(m.status)}">${esc(m.status)}</td>
       <td>${(m.visibility || []).map((v) => `<span class="chip">${esc(v)}</span>`).join("")}</td>
+      <td class="small">${m.expires_at ? esc(new Date(m.expires_at).toLocaleString()) : "No expiry"}</td>
       <td class="content">${esc(m.content)}${extra}</td>
       <td class="small">${esc(m.source?.proposed_by)}${m.approved_by ? ` → ${esc(m.approved_by)}` : ""}</td>
       <td>${actions.map(([a, l]) => `<button data-mem="${esc(m.memory_id)}" data-act="${a}">${l}</button>`).join(" ")}</td>
@@ -117,11 +118,82 @@ async function loadMemories() {
   }).join("");
 }
 
+async function loadMonthlyReview() {
+  const runs = await api("/api/memory-review/runs");
+  const select = $("#monthly-batch");
+  const previous = select.value;
+  select.innerHTML = '<option value="">Select a completed scan</option>' + runs
+    .filter((r) => r.status === "complete")
+    .map((r) => `<option value="${esc(r.batch_id)}">${esc(r.batch_id)}</option>`).join("");
+  if (runs.some((r) => r.batch_id === previous && r.status === "complete")) select.value = previous;
+  else if (select.options.length > 1) select.selectedIndex = 1;
+
+  const batch = select.value;
+  if (!batch) {
+    $("#query-review-table tbody").innerHTML = "";
+    $("#memory-review-table tbody").innerHTML = "";
+    return;
+  }
+  const [queries, memories] = await Promise.all([
+    api(`/api/memory-review/items?batch_id=${encodeURIComponent(batch)}&item_type=query&status=pending`),
+    api(`/api/memory-review/items?batch_id=${encodeURIComponent(batch)}&item_type=memory&status=pending`),
+  ]);
+  $("#query-review-table tbody").innerHTML = queries.map((item) => `<tr>
+    <td>${esc(item.user_id)} <span class="muted small">(${esc(item.role)})</span></td>
+    <td class="content">${esc(item.question)}</td><td>${esc(item.outcome)}</td>
+    <td><button data-review-item="${esc(item.item_id)}" data-review-action="retain">Keep</button>
+        <button data-review-item="${esc(item.item_id)}" data-review-action="delete">Delete query</button></td>
+  </tr>`).join("");
+  $("#memory-review-table tbody").innerHTML = memories.map((item) => `<tr>
+    <td>${esc(item.title)} <span class="muted small">${esc(item.memory_id)}</span></td>
+    <td>${item.version}</td><td class="content">${esc(item.content)}<div class="muted small">${esc(item.review_reason)}</div></td>
+    <td><button data-review-item="${esc(item.item_id)}" data-review-action="retain">Keep memory</button>
+        <button data-review-item="${esc(item.item_id)}" data-review-action="delete">Forget memory</button></td>
+  </tr>`).join("");
+}
+
+$("#monthly-run").addEventListener("click", (e) => withBusy([e.target], async () => {
+  const summary = await api("/api/memory-review/run", { method: "POST" });
+  alert(`Monthly review ${summary.batch_id}: ${summary.query_items} queries, ${summary.memory_items} unused memories, ${summary.proposed_memory_ids.length} memory proposals.`);
+  await loadMonthlyReview();
+}));
+$("#monthly-refresh").addEventListener("click", () => loadMonthlyReview().catch((e) => alert(e.message)));
+$("#monthly-batch").addEventListener("change", () => loadMonthlyReview().catch((e) => alert(e.message)));
+document.querySelector("#reviewer").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-review-item]");
+  if (!b) return;
+  const action = b.dataset.reviewAction, itemId = b.dataset.reviewItem;
+  let body;
+  if (action === "delete") {
+    const reason = prompt("Reason for deleting this query or forgetting this memory:");
+    if (reason === null) return;
+    body = { reason };
+  }
+  withBusy([b], async () => {
+    await api(`/api/memory-review/items/${encodeURIComponent(itemId)}/${action}`, {
+      method: "POST", ...(body ? { body } : {}),
+    });
+    await loadMonthlyReview();
+    await loadMemories();
+  });
+});
+
 $("#mem-table").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-act]");
   if (!b) return;
   const act = b.dataset.act, id = b.dataset.mem;
   let body = {};
+  if (act === "approve") {
+    const row = b.closest("tr");
+    const current = [...row.querySelectorAll(".chip")].map((x) => x.textContent).join(", ");
+    const roles = prompt("Roles that can read this memory (finance_lead, analyst, store_manager):", current);
+    if (roles === null) return;
+    const selected = roles.split(",").map((x) => x.trim()).filter(Boolean);
+    if (!selected.length) { alert("Select at least one role."); return; }
+    const expiry = prompt("Expiry date/time in ISO format, or leave blank for no expiry:", "");
+    if (expiry === null) return;
+    body = { visibility: selected, ...(expiry.trim() ? { expires_at: expiry.trim() } : {}) };
+  }
   if (act === "reject" || act === "forget" || act === "expire") {
     const reason = prompt(`Reason to ${act} ${id}?`);
     if (reason === null) return;
@@ -166,7 +238,7 @@ $("#audit-refresh").addEventListener("click", () => loadAudit().catch((e) => ale
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
   document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("hidden", p.id !== t.dataset.tab));
-  if (t.dataset.tab === "reviewer") { loadMemories().catch((e) => alert(e.message)); loadSkills().catch((e) => alert(e.message)); }
+  if (t.dataset.tab === "reviewer") { loadMemories().catch((e) => alert(e.message)); loadSkills().catch((e) => alert(e.message)); loadMonthlyReview().catch((e) => alert(e.message)); }
   if (t.dataset.tab === "audit") loadAudit().catch((e) => alert(e.message));
 }));
 

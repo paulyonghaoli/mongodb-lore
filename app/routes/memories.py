@@ -1,6 +1,4 @@
 """Memory governance workstream: list, approve, reject, expire, forget."""
-from datetime import datetime
-
 from fastapi import APIRouter, Depends
 
 from .. import memory
@@ -20,8 +18,7 @@ def approve(memory_id: str, body: ApproveBody | None = None,
             user: UserContext = Depends(current_user)) -> dict:
     require_reviewer(user)
     body = body or ApproveBody()
-    expires = datetime.fromisoformat(body.expires_at.replace("Z", "+00:00")) if body.expires_at else None
-    return memory.approve(user, memory_id, body.visibility, expires)
+    return memory.approve(user, memory_id, body.visibility, body.expires_at)
 
 
 @router.post("/{memory_id}/reject")

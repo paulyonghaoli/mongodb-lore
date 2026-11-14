@@ -1,4 +1,5 @@
 """Shared document shapes. See docs/contracts.md; change these only with the team."""
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -55,7 +56,7 @@ class ReasonBody(BaseModel):
 class ApproveBody(BaseModel):
     # Reviewer may set the final visibility at approval time
     visibility: list[Role] | None = None
-    expires_at: str | None = None  # ISO datetime
+    expires_at: datetime | None = None
 
 
 class GenerateSkillBody(BaseModel):

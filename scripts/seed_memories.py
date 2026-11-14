@@ -27,7 +27,8 @@ def main() -> None:
     args = ap.parse_args()
     d = db.app_db()
     if args.reset:
-        for c in (db.MEMORIES, db.SESSIONS, db.EPISODES, db.SKILLS, db.AUDIT_LOG):
+        for c in (db.MEMORIES, db.SESSIONS, db.EPISODES, db.SKILLS, db.AUDIT_LOG,
+                  db.MEMORY_REVIEW_RUNS, db.MEMORY_REVIEW_ITEMS):
             d[c].delete_many({})
         print("cleared lore collections (sales untouched)")
 

@@ -46,8 +46,22 @@
       <button id="mem-refresh" type="button">Refresh</button>
     </div>
     <table id="mem-table"><thead><tr>
-      <th>ID</th><th>Title</th><th>Version</th><th>Status</th><th>Visible to</th><th>Content</th><th>Source</th><th>Actions</th>
+      <th>ID</th><th>Title</th><th>Version</th><th>Status</th><th>Visible to</th><th>Expires</th><th>Content</th><th>Source</th><th>Actions</th>
     </tr></thead><tbody></tbody></table>
+
+    <h2>Monthly query and memory review</h2>
+    <p class="muted small">The scan creates memory proposals for approval and puts queries and unused memories in a review queue. Deletion requires reviewer action.</p>
+    <div class="row">
+      <button id="monthly-run" type="button">Scan previous month</button>
+      <label>Review month
+        <select id="monthly-batch"><option value="">Select a completed scan</option></select>
+      </label>
+      <button id="monthly-refresh" type="button">Refresh review queue</button>
+    </div>
+    <h3>Queries awaiting retention decision</h3>
+    <table id="query-review-table"><thead><tr><th>User</th><th>Question</th><th>Outcome</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <h3>Active memories not used in the scanned month</h3>
+    <table id="memory-review-table"><thead><tr><th>Memory</th><th>Version</th><th>Content</th><th>Actions</th></tr></thead><tbody></tbody></table>
 
     <h2>Skills</h2>
     <div class="row">

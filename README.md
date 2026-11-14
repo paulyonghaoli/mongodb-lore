@@ -19,6 +19,7 @@ python -m scripts.setup_indexes             # regular + memory_vec / episode_vec
 python -m scripts.seed_memories --reset     # starting memories, incl. the deliberately wrong net margin
 uvicorn app.main:app --reload               # http://localhost:8000
 python -m app.workers.learning              # optional: turns sessions into episodes (change stream)
+python -m scripts.monthly_memory_review     # previous month; creates reviewer queues and pending memory proposals
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
 
@@ -69,6 +70,9 @@ All calls send `X-User: fatima | alex | sam`.
 | POST | `/api/replay` | Same question without and with memory, side by side |
 | GET | `/api/memories?status=` | Memories the user can see |
 | POST | `/api/memories/{id}/approve` · `reject` · `expire` · `forget` | Reviewer actions (`{reason}` for reject/forget) |
+| POST | `/api/memory-review/run?month=YYYY-MM` | Scan one month (defaults to the previous complete month) |
+| GET | `/api/memory-review/runs` · `/items?batch_id=&item_type=&status=` | Monthly query and memory review queues (reviewers only) |
+| POST | `/api/memory-review/items/{item_id}/delete` · `/retain` | Reviewer confirms query deletion / memory forgetting, or keeps the item |
 | GET | `/api/skills` · `/api/skills/clusters` | Skill library and episode clusters |
 | POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (manual trigger), publish, retire |
 | GET | `/api/audit` | Recent audit events (reviewers see all; others see their own) |
@@ -101,3 +105,21 @@ Checkpoint: by **1:00 PM**, two roles get correctly different answers from the s
 - **`/api/replay`** is an addition for the interface; the contract replay (calling `/api/ask` twice) still works.
 - **Vector Search filter on `expires_at: null`** needs checking on the Sandbox; retrieval re-checks
   expiry in code either way.
+
+### Monthly memory review
+
+Schedule `python -m scripts.monthly_memory_review` monthly (for example, on day 1). It scans all
+session queries from the previous complete calendar month, places each query in a reviewer retention
+queue, and asks the LLM to draft only explicit, reusable definitions or facts found in those turns.
+Drafts enter `memories` as `pending`; they do not affect retrieval until approved. Active memories not
+used during the scanned month are listed as review candidates, never deleted automatically. Reviewers
+can keep or delete each query, and keep or forget each candidate memory. Deleting a query removes its
+session and episode, scrubs its question and pipeline from the query audit event, and retires skills
+that depended on its episode. A small audit event remains. Memory forgetting follows the existing
+governance path and preserves its audit record.
+
+Example cron entry (replace the paths with the project's checkout and Python environment):
+
+```cron
+0 2 1 * * cd /path/to/mongodb-lore && /path/to/venv/bin/python -m scripts.monthly_memory_review
+```

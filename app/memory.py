@@ -79,6 +79,12 @@ def propose(
         if visibility and set(visibility) - {user.role}:
             raise HTTPException(403, "You cannot propose wider visibility than your own role")
 
+    invalid_roles = set(visibility or []) - set(ROLES)
+    if invalid_roles:
+        raise HTTPException(422, f"Unknown visibility roles: {sorted(invalid_roles)}")
+    if visibility is not None and not visibility:
+        raise HTTPException(422, "Visibility must include at least one role")
+
     latest = _col().find_one({"title": proposed.title}, sort=[("version", -1)])
     version = (latest["version"] + 1) if latest else 1
     memory_id = f"mem_{slug(proposed.title)}_v{version}"
@@ -94,7 +100,8 @@ def propose(
         "status": "pending",
         "visibility": vis,
         "expires_at": None,
-        "source": {"turn_id": source_turn_id, "proposed_by": user.user_id},
+        "source": {"turn_id": source_turn_id, "proposed_by": user.user_id,
+                   "corrects_memory": latest["memory_id"] if latest else None},
         "approved_by": None,
         "created_at": _now(),
         "forgotten": None,
@@ -103,7 +110,8 @@ def propose(
     }
     _col().insert_one(doc)
     audit.write(user, "memory_propose", "memory", memory_id,
-                {"title": proposed.title, "version": version})
+                {"title": proposed.title, "version": version,
+                 "corrects_memory": doc["source"]["corrects_memory"]})
     return _public(doc)
 
 
@@ -113,9 +121,23 @@ def approve(
     visibility: list[str] | None = None,
     expires_at: datetime | None = None,
 ) -> dict:
+    if not reviewer.can_review:
+        raise HTTPException(403, "Reviewer permission required")
     doc = _get(memory_id)
     if doc["status"] != "pending":
         raise HTTPException(409, f"Memory is {doc['status']}, not pending")
+
+    if visibility is not None and (not visibility or set(visibility) - set(ROLES)):
+        raise HTTPException(422, "Visibility must include one or more valid roles")
+    if expires_at is not None:
+        expires_at = _aware(expires_at)
+        if expires_at <= _now():
+            raise HTTPException(422, "Expiry must be in the future")
+
+    newer_active = _col().find_one({"title": doc["title"], "status": "active",
+                                    "version": {"$gt": doc["version"]}})
+    if newer_active:
+        raise HTTPException(409, "A newer version is already active")
 
     text = f"{doc['title']}: {doc['content']}"
     update: dict[str, Any] = {
@@ -125,24 +147,23 @@ def approve(
         "embedding": embeddings.embed_one(text, "document"),
         "embed_model": embeddings.model_name(),
     }
-    if visibility:
+    if visibility is not None:
         update["visibility"] = visibility
-    if expires_at:
+    if expires_at is not None:
         update["expires_at"] = expires_at
     _col().update_one({"memory_id": memory_id}, {"$set": update})
 
     # Older active versions of the same title are superseded
-    superseded = [
-        d["memory_id"]
-        for d in _col().find({"title": doc["title"], "status": "active",
-                              "memory_id": {"$ne": memory_id}})
-    ]
+    superseded = [d["memory_id"] for d in _col().find({
+        "title": doc["title"], "status": "active", "memory_id": {"$ne": memory_id}})]
     if superseded:
         _col().update_many({"memory_id": {"$in": superseded}},
                            {"$set": {"status": "superseded", "superseded_by": memory_id}})
 
     audit.write(reviewer, "memory_approve", "memory", memory_id,
-                {"superseded": superseded, "visibility": update.get("visibility", doc["visibility"])})
+                {"superseded": superseded, "visibility": update.get("visibility", doc["visibility"]),
+                 "expires_at": expires_at.isoformat() if expires_at else None,
+                 "version": doc["version"], "corrects_memory": doc["source"].get("corrects_memory")})
 
     if doc["type"] == "metric":
         # Skills built on an older version of this metric need review
@@ -153,6 +174,8 @@ def approve(
 
 
 def reject(reviewer: UserContext, memory_id: str, reason: str) -> dict:
+    if not reviewer.can_review:
+        raise HTTPException(403, "Reviewer permission required")
     doc = _get(memory_id)
     if doc["status"] != "pending":
         raise HTTPException(409, f"Memory is {doc['status']}, not pending")
@@ -164,6 +187,8 @@ def reject(reviewer: UserContext, memory_id: str, reason: str) -> dict:
 
 
 def expire(reviewer: UserContext | None, memory_id: str, reason: str = "") -> dict:
+    if reviewer is not None and not reviewer.can_review:
+        raise HTTPException(403, "Reviewer permission required")
     doc = _get(memory_id)
     if doc["status"] != "active":
         raise HTTPException(409, f"Memory is {doc['status']}, not active")
@@ -178,17 +203,24 @@ def expire(reviewer: UserContext | None, memory_id: str, reason: str = "") -> di
 
 
 def forget(reviewer: UserContext, memory_id: str, reason: str) -> dict:
+    if not reviewer.can_review:
+        raise HTTPException(403, "Reviewer permission required")
     if not reason:
         raise HTTPException(400, "A reason is required to forget a memory")
     doc = _get(memory_id)
     if doc["status"] == "forgotten":
         raise HTTPException(409, "Memory is already forgotten")
+    forgotten_at = _now()
     # Content stays for the audit record; the embedding is dropped so it can never be retrieved
     _col().update_one({"memory_id": memory_id},
                       {"$set": {"status": "forgotten", "embedding": None,
-                                "forgotten": {"by": reviewer.user_id, "reason": reason, "at": _now()}}})
+                                "expires_at": forgotten_at,
+                                "forgotten": {"by": reviewer.user_id, "reason": reason,
+                                              "at": forgotten_at}}})
     audit.write(reviewer, "memory_forget", "memory", memory_id,
-                {"reason": reason, "previous_status": doc["status"]})
+                {"reason": reason, "previous_status": doc["status"],
+                 "previous_expires_at": doc.get("expires_at"),
+                 "forgotten_at": forgotten_at.isoformat()})
     return _public(_get(memory_id))
 
 
