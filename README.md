@@ -122,6 +122,7 @@ All calls send `X-User: fatima | alex | sam`.
 | GET | `/api/memory-review/runs` · `/items?batch_id=&item_type=&status=` | Monthly query and memory review queues (reviewers only) |
 | POST | `/api/memory-review/items/{item_id}/delete` · `/retain` | Reviewer confirms query deletion / memory forgetting, or keeps the item |
 | GET | `/api/skills` · `/api/skills/clusters` | Skill library and episode clusters |
+| GET | `/api/skills/clusters/{id}/episodes` · `/api/skills/learning` | The questions behind a cluster (reviewer only); what became of answered turns |
 | POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (manual trigger), publish, retire |
 | GET | `/api/audit` | Recent audit events (reviewers see all; others see their own) |
 
