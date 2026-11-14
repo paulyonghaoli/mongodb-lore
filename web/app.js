@@ -731,6 +731,7 @@ function skillItem(s) {
         <pre>${esc(prettyJson(s.pipeline_template))}</pre>
       </details></div>
     <div class="item-meta">${origin ? `<span>${origin}</span>` : ""}
+      ${s.drafted_by ? `<span>${s.drafted_by === "learning_worker" ? "Drafted automatically by the learning worker" : `Drafted by ${esc(userName(s.drafted_by))}`}</span>` : ""}
       ${s.reviewed_by ? `<span>Published by ${esc(userName(s.reviewed_by))}${s.published_at ? `, ${esc(fmtTime(s.published_at))}` : ""}</span>` : "<span>Not reviewed yet</span>"}
       ${s.cluster_id ? `<span>From cluster <code>${esc(s.cluster_id)}</code></span>` : ""}</div>
     <div class="item-actions">${actions.join("")}</div>
@@ -748,15 +749,46 @@ function learningNote(l) {
   return `Questions asked in the app: ${parts.join(", ")}.${latest} Sample activity loaded by script: ${plural(l.sample_episodes ?? 0, "episode")}.`;
 }
 
-async function loadSkills() {
+let skillsSeen = "";      // what the Skills tab last rendered
+let draftsSeen = null;    // names of the drafts last seen, to announce a new one
+
+function noteDrafts(skills) {
+  const drafts = skills.filter((k) => k.status === "draft");
+  $("#draft-badge").textContent = drafts.length;
+  $("#draft-badge").classList.toggle("hidden", !drafts.length || !state.me.can_review);
+  const names = new Set(drafts.map((k) => `${k.name} v${k.version}`));
+  if (draftsSeen) {
+    for (const k of drafts) {
+      if (!draftsSeen.has(`${k.name} v${k.version}`)) {
+        toast(`New draft: ${k.name} v${k.version}${k.drafted_by === "learning_worker" ? ", drafted automatically" : ""}. It needs a reviewer.`);
+      }
+    }
+  }
+  draftsSeen = names;
+}
+
+// `quiet` is the background refresh: it redraws only when something changed, so an open list stays open.
+async function loadSkills({ quiet = false } = {}) {
   const [clusters, { skills }, learning] = await Promise.all([
     api("/api/skills/clusters"), api("/api/skills"), api("/api/skills/learning").catch(() => null)]);
+  noteDrafts(skills);
+  const seen = JSON.stringify([state.me.user_id, clusters, skills, learning]);
+  if (quiet && seen === skillsSeen) return;
+  skillsSeen = seen;
   $("#learning-note").textContent = learning ? learningNote(learning) : "";
   $("#cluster-list").innerHTML = clusters.length ? clusters.map(clusterItem).join("")
     : '<div class="empty">No episodes yet. They appear after questions are answered and the learning worker has processed them.</div>';
   $("#skill-list").innerHTML = skills.length ? skills.map(skillItem).join("")
     : '<div class="empty">No skills yet. Draft one from a ready cluster.</div>';
 }
+
+// The worker can add episodes and drafts at any time: keep the Skills tab current while it is open,
+// and keep the reviewer's draft count current on any tab.
+setInterval(() => {
+  if (!state.me || document.hidden) return;
+  if (state.tab === "skills") loadSkills({ quiet: true }).catch(() => {});
+  else if (state.me.can_review) api("/api/skills").then(({ skills }) => noteDrafts(skills)).catch(() => {});
+}, 8000);
 
 // The questions behind a cluster load when the reviewer opens them ("toggle" does not bubble: capture it).
 $("#cluster-list").addEventListener("toggle", async (e) => {
@@ -823,6 +855,7 @@ const AUDIT_FILTERS = [["", "All"], ["query", "Queries"], ["memory", "Memory"], 
 const ACTION_LABELS = {
   query: "Query", memory_propose: "Memory proposed", memory_approve: "Memory approved", memory_reject: "Memory rejected",
   memory_expire: "Memory expired", memory_forget: "Memory forgotten", skill_publish: "Skill published", skill_retire: "Skill retired",
+  skill_draft: "Skill drafted",
   query_delete: "Query deleted", review_retain: "Kept after review",
 };
 
@@ -845,6 +878,9 @@ function auditSummary(ev) {
   if (d.superseded?.length) parts.push(`supersedes ${esc(d.superseded.join(", "))}`);
   if (d.corrects_memory) parts.push(`corrects ${esc(d.corrects_memory)}`);
   if (d.batch_id) parts.push(`monthly review ${esc(d.batch_id)}`);
+  if (d.drafted_by) parts.push(d.drafted_by === "learning_worker" ? "drafted automatically by the learning worker" : `drafted by ${esc(userName(d.drafted_by))}`);
+  if (d.cluster_id) parts.push(`from cluster ${esc(d.cluster_id)}`);
+  if (d.tests) parts.push(`tests: ${esc(Object.entries(d.tests).map(([k, v]) => `${k} ${v}`).join(", "))}`);
   if (d.episodes_deleted) parts.push(`${plural(d.episodes_deleted, "episode")} deleted`);
   return parts.join(" · ");
 }
@@ -912,6 +948,9 @@ function setUser(id) {
   renderRuns();
   showTab(state.tab);
   if (state.tab !== "reviewer") refreshPending();
+  draftsSeen = null;
+  skillsSeen = "";
+  if (state.tab !== "skills") api("/api/skills").then(({ skills }) => noteDrafts(skills)).catch(() => {});
 }
 
 async function init() {

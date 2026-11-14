@@ -438,7 +438,24 @@ def _test(skill: dict, episodes: list[dict]) -> dict:
             "permissions": "fail" if any(r["result"] == "fail" for r in permissions) else "pass"}
 
 
-def generate(cluster_id: str | None = None) -> dict:
+AUTO_DRAFTER = "learning_worker"  # `drafted_by` on a skill the worker drafted without anyone asking
+
+
+def draft_if_ready(cluster_id: str) -> dict | None:
+    """Automatic drafting: draft a skill when the cluster is ready and nothing was ever drafted from it.
+
+    Returns the draft, or None when there is nothing to do. Only the drafting is automatic: the draft
+    is not offered to the agent until a reviewer publishes it.
+    """
+    cluster = next((c for c in clusters() if c["cluster_id"] == cluster_id), None)
+    if cluster is None or not cluster["ready"] or cluster["skills"]:
+        return None
+    return generate(cluster_id, drafted_by=None)
+
+
+def generate(cluster_id: str | None = None, drafted_by: UserContext | None = None) -> dict:
+    """Draft a skill from a ready cluster and test it. `drafted_by` is the reviewer who asked, or None
+    when the learning worker drafted it on its own."""
     ready = [c for c in clusters() if c["ready"]]
     if cluster_id:
         ready = [c for c in ready if c["cluster_id"] == cluster_id]
@@ -476,12 +493,17 @@ def generate(cluster_id: str | None = None) -> dict:
         "metric_versions": metric_versions,
         "source_episodes": [e["episode_id"] for e in episodes],
         "drafted_from": [e["episode_id"] for e in sample],
+        "drafted_by": drafted_by.user_id if drafted_by else AUTO_DRAFTER,
         "cluster_id": cluster["cluster_id"],
         "reviewed_by": None,
         "created_at": _now(),
     }
     skill["test_results"] = _test(skill, sample)
     db.app_db()[db.SKILLS].insert_one(skill)
+    # actor None is recorded as "system": nobody asked for this draft
+    audit.write(drafted_by, "skill_draft", "skill", skill["name"], {
+        "version": skill["version"], "cluster_id": skill["cluster_id"], "drafted_by": skill["drafted_by"],
+        "tests": skill["test_results"]})
     return _with_sources([_public(skill)])[0]
 
 
