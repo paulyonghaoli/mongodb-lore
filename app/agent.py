@@ -4,6 +4,7 @@ The model only plans. Code retrieves memory, guards the pipeline, runs it and
 saves the session; the model never sees rows the user cannot see.
 """
 import json
+import re
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -165,8 +166,22 @@ def _history_text(history: list[dict]) -> str:
 
 
 def _new_turn_id(session_id: str) -> str:
-    n = db.app_db()[db.SESSIONS].count_documents({"session_id": session_id})
-    return f"{session_id}_t{n + 1}"
+    """Next turn number after the highest one in the session.
+
+    Not a count: turns can be deleted (monthly review), and a count would then
+    hand out an ID that already exists.
+    """
+    pattern = re.compile(rf"{re.escape(session_id)}_t(\d+)")
+    numbers = [int(m.group(1)) for d in db.app_db()[db.SESSIONS].find({"session_id": session_id}, {"turn_id": 1})
+               if (m := pattern.fullmatch(d.get("turn_id") or ""))]
+    return f"{session_id}_t{max(numbers, default=0) + 1}"
+
+
+def _resolve_pipeline(user: UserContext, out: AgentOutput) -> tuple[list[dict], dict | None]:
+    """The pipeline to run for a plan: the skill's rendered template, or the planned pipeline."""
+    if out.skill:
+        return skills.render_for(user, out.skill.name, out.skill.parameters), out.skill.model_dump()
+    return out.pipeline, None
 
 
 def plan(user: UserContext, question: str, memories: list[dict], offered: list[dict],
@@ -217,15 +232,13 @@ def ask(user: UserContext, question: str, session_id: str | None = None,
     turn_id = _new_turn_id(session_id)
 
     memories = memory.retrieve(user, question, use_memory=use_memory)
-    offered = skills.offered_to(user)
+    # Skills are learned team knowledge: "without memory" means without them too
+    offered = skills.offered_to(user) if use_memory else []
     history = session_history(user, session_id) if use_history else []
 
     out = plan(user, question, memories, offered, usage, history=history)
     pipeline = out.pipeline
     skill_used = None
-    if out.skill:
-        pipeline = skills.render_for(user, out.skill.name, out.skill.parameters)
-        skill_used = out.skill.model_dump()
 
     rows: list[dict] = []
     answer = ""
@@ -236,6 +249,8 @@ def ask(user: UserContext, question: str, session_id: str | None = None,
     for attempt in (1, 2):
         execution["attempts"] = attempt
         try:
+            # Inside the try: an unavailable skill or missing parameter is a clean rejection
+            pipeline, skill_used = _resolve_pipeline(user, out)
             safe, governance = guard_pipeline(user, out.collection, pipeline, settings.max_result_rows)
         except GuardError as e:
             outcome = "rejected"
@@ -258,7 +273,7 @@ def ask(user: UserContext, question: str, session_id: str | None = None,
                 {"role": "assistant", "content": json.dumps({"pipeline_json": json_util.dumps(pipeline)})},
                 {"role": "user", "content": f"That pipeline failed in MongoDB: {e}. Fix it."},
             ])
-            pipeline = out.pipeline
+            # The next pass resolves the new plan, rendering a skill if the replan chose one
 
     audit.write(user, "query", "collection", out.collection, {
         "turn_id": turn_id, "question": question, "status": execution["status"],
