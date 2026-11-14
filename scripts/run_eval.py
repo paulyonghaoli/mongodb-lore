@@ -13,7 +13,7 @@ from app.users import get_user
 EXPECTED = Path(__file__).resolve().parent.parent / "docs" / "expected_answers.json"
 
 CASES = [
-    # Net margin needs supplier_cost, which only the finance lead can see
+    # Finance lead can read supplier_cost; analysts remain correctly blocked by the guard.
     ("fatima", "What was net margin by region in Q3?", "q1_q3_net_margin_by_region"),
     ("alex", "Return rate by category in September", "q7_return_rate_by_category_september"),
     ("alex", "Sales growth by region, August to September", "q8_sales_growth_by_region_aug_to_sep"),

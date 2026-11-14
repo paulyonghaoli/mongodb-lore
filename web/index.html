@@ -52,16 +52,28 @@
       <h2>Shared memory</h2>
       <button type="button" class="secondary" id="mem-refresh">Refresh</button>
     </div>
-    <p id="mem-note" class="muted small"></p>
-    <div id="mem-filters" class="pills"></div>
-    <div id="mem-list" class="list"></div>
-  </section>
+    <table id="mem-table"><thead><tr>
+      <th>ID</th><th>Title</th><th>Version</th><th>Status</th><th>Visible to</th><th>Expires</th><th>Content</th><th>Source</th><th>Actions</th>
+    </tr></thead><tbody></tbody></table>
 
-  <!-- Skills: episode clusters and the skill library -->
-  <section id="skills" class="panel hidden">
-    <div class="section-head">
-      <h2>Skills from repeated analyses</h2>
-      <button type="button" class="secondary" id="skills-refresh">Refresh</button>
+    <h2>Monthly query and memory review</h2>
+    <p class="muted small">The scan creates memory proposals for approval and puts queries and unused memories in a review queue. Deletion requires reviewer action.</p>
+    <div class="row">
+      <button id="monthly-run" type="button">Scan previous month</button>
+      <label>Review month
+        <select id="monthly-batch"><option value="">Select a completed scan</option></select>
+      </label>
+      <button id="monthly-refresh" type="button">Refresh review queue</button>
+    </div>
+    <h3>Queries awaiting retention decision</h3>
+    <table id="query-review-table"><thead><tr><th>User</th><th>Question</th><th>Outcome</th><th>Actions</th></tr></thead><tbody></tbody></table>
+    <h3>Active memories not used in the scanned month</h3>
+    <table id="memory-review-table"><thead><tr><th>Memory</th><th>Version</th><th>Content</th><th>Actions</th></tr></thead><tbody></tbody></table>
+
+    <h2>Skills</h2>
+    <div class="row">
+      <button id="skills-refresh" type="button">Refresh</button>
+      <button id="skills-generate" type="button">Draft skill from a ready cluster</button>
     </div>
     <p class="muted small">Answered questions are distilled into episodes. A cluster is ready at three similar episodes from two people.
       A reviewer drafts a skill from a ready cluster, and it must pass its tests before it can be published.

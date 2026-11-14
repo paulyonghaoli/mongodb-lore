@@ -20,6 +20,8 @@ SESSIONS = "sessions"
 EPISODES = "episodes"
 SKILLS = "skills"
 AUDIT_LOG = "audit_log"
+MEMORY_REVIEW_RUNS = "memory_review_runs"
+MEMORY_REVIEW_ITEMS = "memory_review_items"
 
 
 def set_databases(app: Database, business: Database | None = None) -> None:

@@ -23,6 +23,19 @@ BANNED_OPERATORS = {
 }
 
 
+def _walk(node: Any):
+    """Yield every dict key and every string value in a nested structure."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield ("key", key)
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk(item)
+    elif isinstance(node, str):
+        yield ("str", node)
+
+
 class GuardError(Exception):
     """The pipeline was rejected. `reason` is safe to show the user."""
 
@@ -32,19 +45,6 @@ class GuardError(Exception):
         self.hidden_fields_referenced = hidden_fields_referenced or []
 
 
-def _walk(node: Any):
-    """Yield every dict key and every string value in a nested structure."""
-    if isinstance(node, dict):
-        for k, v in node.items():
-            yield ("key", k)
-            yield from _walk(v)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _walk(item)
-    elif isinstance(node, str):
-        yield ("str", node)
-
-
 def _field_root(path: str) -> str:
     return path.split(".", 1)[0]
 
@@ -52,15 +52,28 @@ def _field_root(path: str) -> str:
 def find_hidden_references(pipeline: list[dict], hidden: list[str]) -> list[str]:
     hidden_set = set(hidden)
     found: set[str] = set()
-    for kind, value in _walk(pipeline):
-        if kind == "key" and _field_root(value) in hidden_set:
-            found.add(_field_root(value))
-        elif kind == "str":
-            # "$supplier_cost", "$supplier_cost.x"; ignore "$$vars"
-            if value.startswith("$") and not value.startswith("$$"):
-                root = _field_root(value[1:])
-                if root in hidden_set:
+
+    def walk(node: Any, parent_operator: str | None = None) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                root = _field_root(key)
+                # In $project, 0/null means exclude this input field. Its name
+                # appears as a key, but no hidden data is read or returned.
+                excluded = parent_operator == "$project" and value in (0, None, False)
+                if root in hidden_set and not excluded:
                     found.add(root)
+                next_operator = key if key.startswith("$") else parent_operator
+                walk(value, next_operator)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, parent_operator)
+        elif isinstance(node, str) and node.startswith("$") and not node.startswith("$$"):
+            # "$supplier_cost", "$supplier_cost.x"; ignore "$$vars".
+            root = _field_root(node[1:])
+            if root in hidden_set:
+                found.add(root)
+
+    walk(pipeline)
     return sorted(found)
 
 
