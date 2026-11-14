@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from . import audit, db, llm, memory
 from .models import ProposedMemory, UserContext
-
+# checking schema
 MEMORY_SCHEMA = {
     "type": "object",
     "properties": {
