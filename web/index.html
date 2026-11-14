@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lore</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><strong>Lore</strong> <span class="muted">governed memory for analyst agents</span></div>
+  <label>Signed in as
+    <select id="user"></select>
+  </label>
+</header>
+
+<nav>
+  <button class="tab active" data-tab="analyst">Analyst</button>
+  <button class="tab" data-tab="reviewer">Reviewer</button>
+  <button class="tab" data-tab="audit">Audit log</button>
+</nav>
+
+<main>
+  <!-- Analyst view -->
+  <section id="analyst" class="panel">
+    <form id="ask-form">
+      <input id="question" placeholder="Ask a business question, e.g. What was net margin by region in Q3?" autocomplete="off">
+      <label class="check"><input type="checkbox" id="use-memory" checked> Use shared memory</label>
+      <button type="submit">Ask</button>
+      <button type="button" id="replay">Compare with and without memory</button>
+    </form>
+    <div class="muted small">Session <span id="session-id">new</span> · <a href="#" id="new-session">start new session</a></div>
+    <div id="results"></div>
+  </section>
+
+  <!-- Reviewer view -->
+  <section id="reviewer" class="panel hidden">
+    <h2>Memories</h2>
+    <div class="row">
+      <label>Status
+        <select id="mem-status">
+          <option value="">all</option><option>pending</option><option>active</option>
+          <option>superseded</option><option>expired</option><option>forgotten</option><option>rejected</option>
+        </select>
+      </label>
+      <button id="mem-refresh" type="button">Refresh</button>
+    </div>
+    <table id="mem-table"><thead><tr>
+      <th>ID</th><th>Title</th><th>Version</th><th>Status</th><th>Visible to</th><th>Content</th><th>Source</th><th>Actions</th>
+    </tr></thead><tbody></tbody></table>
+
+    <h2>Skills</h2>
+    <div class="row">
+      <button id="skills-refresh" type="button">Refresh</button>
+      <button id="skills-generate" type="button">Draft skill from a ready cluster</button>
+    </div>
+    <h3>Episode clusters</h3>
+    <table id="cluster-table"><thead><tr><th>Cluster</th><th>Intent</th><th>Episodes</th><th>Users</th><th>Ready</th></tr></thead><tbody></tbody></table>
+    <h3>Skill library</h3>
+    <table id="skill-table"><thead><tr>
+      <th>Name</th><th>Version</th><th>Status</th><th>Description</th><th>Required fields</th><th>Tests</th><th>Actions</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <!-- Audit -->
+  <section id="audit" class="panel hidden">
+    <div class="row"><button id="audit-refresh" type="button">Refresh</button></div>
+    <table id="audit-table"><thead><tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

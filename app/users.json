@@ -1,0 +1,26 @@
+[
+  {
+    "user_id": "fatima",
+    "display_name": "Fatima (Finance lead)",
+    "role": "finance_lead",
+    "rows": {},
+    "hidden_fields": [],
+    "can_review": true
+  },
+  {
+    "user_id": "alex",
+    "display_name": "Alex (Analyst)",
+    "role": "analyst",
+    "rows": {},
+    "hidden_fields": ["supplier_cost"],
+    "can_review": false
+  },
+  {
+    "user_id": "sam",
+    "display_name": "Sam (East store manager)",
+    "role": "store_manager",
+    "rows": { "region": "East" },
+    "hidden_fields": ["supplier_cost"],
+    "can_review": false
+  }
+]
