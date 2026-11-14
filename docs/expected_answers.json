@@ -1,0 +1,96 @@
+{
+  "q1_q3_net_margin_by_region": [
+    {
+      "region": "East",
+      "net_margin": 0.0174
+    },
+    {
+      "region": "North",
+      "net_margin": 0.3746
+    },
+    {
+      "region": "West",
+      "net_margin": 0.3746
+    },
+    {
+      "region": "South",
+      "net_margin": 0.3761
+    }
+  ],
+  "q4_east_store_margin_since_july": [
+    {
+      "store_name": "Harbourfront",
+      "net_margin": -0.1777
+    },
+    {
+      "store_name": "Vaughan",
+      "net_margin": 0.1815
+    },
+    {
+      "store_name": "Markham",
+      "net_margin": 0.1844
+    },
+    {
+      "store_name": "Downtown",
+      "net_margin": 0.1883
+    },
+    {
+      "store_name": "Scarborough",
+      "net_margin": 0.1919
+    }
+  ],
+  "q6_net_margin_by_category": [
+    {
+      "category": "Footwear",
+      "net_margin": 0.1544
+    },
+    {
+      "category": "Camping",
+      "net_margin": 0.4196
+    },
+    {
+      "category": "Apparel",
+      "net_margin": 0.4207
+    },
+    {
+      "category": "Home",
+      "net_margin": 0.4208
+    }
+  ],
+  "q7_return_rate_by_category_september": [
+    {
+      "category": "Apparel",
+      "return_rate": 0.129
+    },
+    {
+      "category": "Camping",
+      "return_rate": 0.1321
+    },
+    {
+      "category": "Footwear",
+      "return_rate": 0.1318
+    },
+    {
+      "category": "Home",
+      "return_rate": 0.1276
+    }
+  ],
+  "q8_sales_growth_by_region_aug_to_sep": [
+    {
+      "region": "East",
+      "sales_growth": -0.0625
+    },
+    {
+      "region": "North",
+      "sales_growth": -0.0124
+    },
+    {
+      "region": "South",
+      "sales_growth": -0.0166
+    },
+    {
+      "region": "West",
+      "sales_growth": -0.0124
+    }
+  ]
+}
