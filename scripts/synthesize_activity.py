@@ -62,13 +62,19 @@ def ratio_by(groups: list[str], start: str, end: str, ratio: str, match: dict | 
     ]
 
 
-def revenue_by(group: str, start: str, end: str, match: dict | None = None, month: bool = False) -> list[dict]:
-    gid = {"$month": "$date"} if month else f"${group}"
+def revenue_by(group: str | list[str], start: str, end: str, match: dict | None = None,
+               month: bool = False) -> list[dict]:
+    groups = [group] if isinstance(group, str) else group
+    if month:
+        gid: Any = {"$month": "$date"}
+    else:
+        gid = f"${groups[0]}" if len(groups) == 1 else {g: f"${g}" for g in groups}
+    proj = {groups[0]: "$_id"} if len(groups) == 1 else {g: f"$_id.{g}" for g in groups}
     return [
         {"$match": {"date": {"$gte": d(start), "$lt": d(end)}, **(match or {})}},
         {"$group": {"_id": gid, "net_revenue": {"$sum": {"$subtract": ["$revenue", "$returns"]}}}},
-        {"$project": {"_id": 0, group: "$_id", "net_revenue": {"$round": ["$net_revenue", 2]}}},
-        {"$sort": {group: 1}},
+        {"$project": {"_id": 0, **proj, "net_revenue": {"$round": ["$net_revenue", 2]}}},
+        {"$sort": {g: 1 for g in groups}},
     ]
 
 
@@ -293,16 +299,81 @@ class Writer:
             self.episode(ts, doc, spec["episode"])
         return doc
 
+    _vec_cache: dict[str, list[float]] = {}
+
     def episode(self, ts: datetime, turn: dict, e: dict) -> None:
+        text = e["intent"] + "\n" + "\n".join(e["method"])
+        if text not in self._vec_cache:  # bulk episodes repeat a few intents; embed each once
+            self._vec_cache[text] = embeddings.embed_one(text)
         ep = {"episode_id": f"ep_{turn['turn_id']}", "turn_id": turn["turn_id"], "user_id": turn["user_id"],
               "intent": e["intent"], "parameters": e["parameters"], "metrics": turn["metrics_used"],
               "collection": "sales", "group_fields": e["group_fields"], "method": e["method"],
               "pipeline": turn["pipeline"], "embed_model": embeddings.model_name(),
-              "embedding": embeddings.embed_one(e["intent"] + "\n" + "\n".join(e["method"])),
-              "created_at": ts, "synthetic": True}
+              "embedding": self._vec_cache[text], "created_at": ts, "synthetic": True}
         ep["structure"] = skills._structure_key(ep)
         ep["cluster_id"] = skills._assign_cluster(ep)
         self.app[db.EPISODES].insert_one(ep)
+
+
+# ---------- bulk activity: everyday questions from all three roles ----------
+
+MONTHS = {m: (f"2026-{m:02d}-01", f"2026-{m + 1:02d}-01" if m < 12 else "2027-01-01")
+          for m in range(1, 11)}
+MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August",
+               "September", "October"]
+QUARTERS = {"Q1": ("2026-01-01", "2026-04-01"), "Q2": ("2026-04-01", "2026-07-01"),
+            "Q3": ("2026-07-01", "2026-10-01")}
+GROUP_WORDS = {"region": "region", "category": "category", "store_name": "store"}
+GROUP_PLURAL = {"region": "regions", "category": "categories", "store_name": "stores"}
+# (metric key, question wording, metrics_used, pipeline builder kind)
+BULK_METRICS = [
+    ("return_rate", "Return rate", ["return_rate@1"], "ratio"),
+    ("net_revenue", "Net revenue", ["net_revenue@1"], "revenue"),
+    ("net_margin_v2", "Net margin", [], "ratio"),  # needs supplier_cost: only the finance lead gets it
+]
+USER_WEIGHTS = [("alex", 0.45), ("sam", 0.35), ("fatima", 0.20)]
+FOLLOW_UPS = ["Break that down by {g}.", "Now by {g}, please.", "Same thing by {g}?"]
+
+
+def bulk_turns(n: int, seed: int = 7) -> list[tuple[str, str, datetime, list[dict]]]:
+    """Seeded, so every run produces the same activity."""
+    import random
+
+    rng = random.Random(seed)
+    users, weights = zip(*USER_WEIGHTS)
+    start = datetime(2026, 10, 30, 9, 0, tzinfo=timezone.utc)
+    sessions, made, k = [], 0, 0
+    while made < n:
+        k += 1
+        user = rng.choices(users, weights)[0]
+        ts = start + timedelta(days=rng.randrange(15), hours=rng.randrange(9), minutes=rng.randrange(60))
+        key, word, metrics, kind = rng.choices(BULK_METRICS, [0.5, 0.35, 0.15])[0]
+        if rng.random() < 0.6:
+            m = rng.randrange(1, 11)
+            (s, e), period = MONTHS[m], f"in {MONTH_NAMES[m]}"
+        else:
+            q = rng.choice(list(QUARTERS))
+            (s, e), period = QUARTERS[q], f"in {q}"
+        group = rng.choice(list(GROUP_WORDS))
+        turns = []
+        for i, g in enumerate([group] + rng.sample([x for x in GROUP_WORDS if x != group],
+                                                   rng.choice([0, 0, 1]))):
+            groups = [g] if i == 0 else [group, g]
+            p = (ratio_by(groups, s, e, key) if kind == "ratio"
+                 else revenue_by(groups, s, e))
+            q_text = (f"{word} by {GROUP_WORDS[g]} {period}" if i == 0
+                      else rng.choice(FOLLOW_UPS).format(g=GROUP_WORDS[g]))
+            spec = {"q": q_text, "metrics": metrics, "p": p}
+            if i == 0:
+                spec["episode"] = {
+                    "intent": f"Rank {GROUP_PLURAL[g]} by {word.lower()} for <period>",
+                    "parameters": {"start": s, "end": e}, "group_fields": [g],
+                    "method": ["Filter sales to the period", f"Sum the inputs of {word.lower()} by {g}",
+                               f"{word} per the company definition", "Sort the result"]}
+            turns.append(spec)
+        sessions.append((f"s_bulk{k:03d}", user, ts, turns))
+        made += len(turns)
+    return sessions
 
 
 def clear() -> None:
@@ -336,6 +407,8 @@ def main() -> None:
     ap.add_argument("--clear", action="store_true", help="only remove synthetic docs")
     ap.add_argument("--approve-correction", action="store_true",
                     help="approve Net margin v2 (default: leave it pending for the live demo)")
+    ap.add_argument("--bulk", type=int, default=150,
+                    help="everyday question turns from all three roles on top of the scripted ones")
     args = ap.parse_args()
 
     clear()
@@ -373,6 +446,14 @@ def main() -> None:
                     w.reject(later, mem, act[1])
                 elif act and act[0] == "forget":
                     w.forget(later, mem, act[1])
+
+    outcomes: dict[str, int] = {}
+    for session_id, user_id, ts0, turns in bulk_turns(args.bulk):
+        for n, spec in enumerate(turns, 1):
+            turn = w.turn(ts0 + timedelta(minutes=3 * n), session_id, n, user_id, spec)
+            outcomes[turn["outcome"]] = outcomes.get(turn["outcome"], 0) + 1
+    if args.bulk:
+        print(f"  bulk: {sum(outcomes.values())} turns {outcomes}")
 
     app = db.app_db()
     print("\nmemories by status:", {r["_id"]: r["n"] for r in app[db.MEMORIES].aggregate(
