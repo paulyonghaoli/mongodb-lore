@@ -43,6 +43,9 @@ python -m scripts.monthly_memory_review     # previous month; creates reviewer q
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
 
+`--drop` replaces the `sales` collection, and `--reset` clears memories, sessions, episodes, skills and the
+audit log. Never run either against a database other people are using.
+
 Offline dev without Atlas or Voyage: set `EMBEDDING_PROVIDER=hash` and `VECTOR_BACKEND=local`, and point
 `MONGODB_URI` at a local `mongod`.
 
