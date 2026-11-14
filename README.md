@@ -79,10 +79,10 @@ Framework only: each piece runs end to end at a starter level. Owners take it fr
 
 | Workstream | Owner | Files | Next steps |
 | --- | --- | --- | --- |
-| Data and access | | `scripts/generate_sales.py`, `scripts/expected_answers.py`, `app/guard.py`, `app/audit.py`, `app/users.json` | Tune the generator so the planted patterns are clear; fill expected answers for all 8 demo questions; create the read-only Atlas user; confirm Sandbox vector index limit |
-| Analyst agent | | `app/agent.py`, `app/llm.py`, `app/routes/ask.py`, `scripts/run_eval.py` | Run demo questions 1–8 end to end; tune prompts until accuracy holds; make the replay show a different query and answer |
-| Memory governance | | `app/memory.py`, `app/routes/memories.py`, `scripts/seed_memories.py` | Verify Vector Search filters on the Sandbox; confirm the visibility rule for proposals; leak tests through memory |
-| Skills and interface | | `app/skills.py`, `app/workers/learning.py`, `app/routes/skills.py`, `web/` | Generate 3 episodes from 2 users, draft and publish one skill; polish the analyst and reviewer views for the demo |
+| Data and access | Jimmy | `scripts/generate_sales.py`, `scripts/expected_answers.py`, `app/guard.py`, `app/audit.py`, `app/users.json` | Tune the generator so the planted patterns are clear; fill expected answers for all 8 demo questions; create the read-only Atlas user; confirm Sandbox vector index limit |
+| Analyst agent | Paul | `app/agent.py`, `app/llm.py`, `app/routes/ask.py`, `scripts/run_eval.py` | Run demo questions 1–8 end to end; tune prompts until accuracy holds; make the replay show a different query and answer |
+| Memory governance | Chloe | `app/memory.py`, `app/routes/memories.py`, `scripts/seed_memories.py` | Verify Vector Search filters on the Sandbox; confirm the visibility rule for proposals; leak tests through memory |
+| Skills and interface | Yue | `app/skills.py`, `app/workers/learning.py`, `app/routes/skills.py`, `web/` | Generate 3 episodes from 2 users, draft and publish one skill; polish the analyst and reviewer views for the demo |
 
 Checkpoint: by **1:00 PM**, two roles get correctly different answers from the same question.
 
