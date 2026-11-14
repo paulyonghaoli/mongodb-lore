@@ -100,28 +100,49 @@ Pre-run everything for this version; there is no time for a live answer.
 
 ## 1-minute video
 
-`demo/lore-demo-1min.mp4` (1080p, 60 seconds, amber captions and voice narration);
+`demo/lore-demo-1min.mp4` (1080p, 59 seconds, captions and voice narration);
 `demo/lore-demo-1min-captions-only.mp4` is the same video without sound.
 
-It follows the three track questions. Every scene is a real run against the shared cluster, and only
-the waiting time is cut. Typed questions, clicks and key results are highlighted in blue.
+It follows the three track questions. Every scene is a real run against the shared cluster; typing
+and waiting are shortened. The voice reads each caption word for word, and each caption stays on
+screen for as long as its line takes to say. Typed questions, clicks and key results are highlighted
+in blue.
 
-| Time | Scene |
+| Time | Caption and spoken line |
 | --- | --- |
-| 0:00 | Title |
-| 0:04 | Question 1, then three roles ask about East's return rate: Finance and the store manager get the East store memory, the analyst does not |
-| 0:15 | Question 2, then net margin with the wrong memory (36%), the correction and its proposal, the reviewer's approval, and the new answer (1.7%) |
-| 0:41 | Question 3, then the replay with and without memory: a different query and result |
-| 0:53 | Why MongoDB Atlas, and the closing card |
+| 0:00 | Lore: memory you can govern, on MongoDB Atlas |
+| 0:04 | Question one: no leaks |
+| 0:06 | Three roles, one question |
+| 0:08 | Finance and the store manager get the store memory |
+| 0:11 | The analyst never does. Atlas Vector Search filters by role. |
+| 0:15 | Question two: fix a wrong memory |
+| 0:18 | Memory has a wrong definition |
+| 0:20 | Every agent says East's margin is 36% |
+| 0:24 | Fatima corrects it |
+| 0:26 | The agent files a proposal |
+| 0:28 | A reviewer sees it |
+| 0:30 | and approves it for every role |
+| 0:33 | The old version is kept and audited |
+| 0:35 | Now any agent asks again |
+| 0:37 | East's margin is 1.7% |
+| 0:40 | Question three: prove it |
+| 0:42 | Same question, with and without memory |
+| 0:45 | The query and the result both change |
+| 0:48 | Gross revenue becomes net revenue |
+| 0:50 | Vector Search, Voyage AI, aggregation, change streams: one Atlas cluster |
+| 0:57 | Lore: memory you can govern |
 
 To re-record (needs the app running, Microsoft Edge, and
-`pip install playwright imageio-ffmpeg edge-tts truststore`):
+`pip install playwright imageio-ffmpeg edge-tts pillow truststore`):
 
 ```bash
 python scripts/record_demo_video.py frames title q1 leak q2 wrong correct approve fixed q3 replay atlas
-python scripts/record_demo_video.py frames --build demo/lore-demo-1min-captions-only.mp4
-python scripts/narrate_demo_video.py frames demo/lore-demo-1min-captions-only.mp4 demo/lore-demo-1min.mp4
+python scripts/narrate_demo_video.py frames final demo/lore-demo-1min-captions-only.mp4 demo/lore-demo-1min.mp4
 ```
+
+The first command records the scenes from the running app. The second speaks each line, redraws the
+captions to match (the lines are in `CUES` at the top of the script), sets each caption's time from
+its spoken line, and builds both videos.
 
 The `approve` scene approves a real correction. Afterwards, re-add the wrong Net margin as a new
 version (propose + approve as Fatima) so the live demo starts uncorrected again. The narration uses
