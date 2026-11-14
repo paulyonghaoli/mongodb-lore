@@ -36,7 +36,7 @@ def learning_status(user: UserContext = Depends(current_user)) -> dict:
 def generate(body: GenerateSkillBody | None = None, user: UserContext = Depends(current_user)) -> dict:
     require_reviewer(user)
     try:
-        return skills.generate((body or GenerateSkillBody()).cluster_id)
+        return skills.generate((body or GenerateSkillBody()).cluster_id, drafted_by=user)
     except llm.LLMError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

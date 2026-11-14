@@ -368,6 +368,87 @@ def test_a_skill_needing_a_hidden_field_is_tested_only_for_users_who_may_run_it(
     assert s["test_results"]["permissions"] == "pass"
 
 
+# ---------- automatic drafting ----------
+
+def test_draft_if_ready_drafts_once_and_only_from_a_ready_cluster(fake_llm, sales):
+    first = skills.extract_episode(make_turn("s_a_t1", "alex", "2026-09-01", "2026-10-01"))
+    cluster = first["cluster_id"]
+    assert skills.draft_if_ready(cluster) is None  # one episode: not ready
+    skills.extract_episode(make_turn("s_b_t1", "sam", "2026-08-01", "2026-09-01"))
+    skills.extract_episode(make_turn("s_c_t1", "fatima", "2026-10-01", "2026-11-01"))
+    s = skills.draft_if_ready(cluster)
+    assert (s["status"], s["drafted_by"]) == ("draft", "learning_worker")
+    assert s["test_results"] == {"replay": "pass", "permissions": "pass"}
+    assert skills.offered_to(get_user("alex")) == []  # still a draft: nothing reaches the agent without a reviewer
+    assert skills.draft_if_ready(cluster) is None     # something was drafted from it already
+    assert skills.draft_if_ready("c_missing") is None
+
+
+def test_draft_if_ready_does_not_bring_back_a_skill_the_reviewer_retired(ready_cluster):
+    fatima = get_user("fatima")
+    name = skills.generate(ready_cluster, drafted_by=fatima)["name"]
+    skills.retire(fatima, name, "Not wanted")
+    assert skills.draft_if_ready(ready_cluster) is None
+    assert db.app_db()[db.SKILLS].count_documents({}) == 1
+
+
+def test_every_draft_is_audited_with_who_asked_for_it(ready_cluster):
+    skills.generate(ready_cluster, drafted_by=get_user("fatima"))
+    db.app_db()[db.SKILLS].delete_many({})  # give the worker something left to draft
+    skills.draft_if_ready(ready_cluster)
+    events = sorted((e for e in audit.recent() if e["action"] == "skill_draft"), key=lambda e: e["ts"])
+    assert [(e["actor"], e["details"]["drafted_by"]) for e in events] == [("fatima", "fatima"), ("system", "learning_worker")]
+    assert events[1]["details"]["cluster_id"] == ready_cluster
+    assert events[1]["details"]["tests"] == {"replay": "pass", "permissions": "pass"}
+
+
+def test_route_records_the_reviewer_as_the_drafter(ready_cluster, client):
+    res = client.post("/api/skills/generate", json={"cluster_id": ready_cluster}, headers={"X-User": "fatima"})
+    assert res.json()["drafted_by"] == "fatima"
+
+
+def save_turns(mock_db, turns=PERIODS) -> list[dict]:
+    mock_db[db.SESSIONS].insert_many([make_turn(t, u, a, b) for t, u, a, b in turns])
+    return list(mock_db[db.SESSIONS].find().sort("turn_id", 1))
+
+
+def test_worker_with_auto_draft_drafts_when_the_cluster_becomes_ready(fake_llm, sales):
+    one, two, three = save_turns(sales)
+    learning.process(one, auto_draft=True)
+    learning.process(two, auto_draft=True)
+    assert sales[db.SKILLS].count_documents({}) == 0  # two episodes: nothing to draft yet
+    learning.process(three, auto_draft=True)
+    (skill,) = skills.list_all()
+    assert (skill["status"], skill["drafted_by"]) == ("draft", "learning_worker")
+    sales[db.SESSIONS].insert_one(make_turn("s_d_t1", "alex", "2026-08-01", "2026-09-01"))
+    assert learning.backlog(auto_draft=True) == 1
+    assert episodes_count() == 4 and sales[db.SKILLS].count_documents({}) == 1  # the cluster keeps its one draft
+
+
+def test_worker_without_auto_draft_never_drafts(fake_llm, sales):
+    save_turns(sales)
+    learning.backlog()
+    assert [c["ready"] for c in skills.clusters()] == [True]
+    assert sales[db.SKILLS].count_documents({}) == 0
+
+
+def test_a_refused_draft_neither_stops_the_worker_nor_loses_the_episode(fake_llm, sales):
+    fake_llm.skill = {"name": "Not Snake Case"}  # the model's draft fails the checks
+    save_turns(sales)
+    assert learning.backlog(auto_draft=True) == 3
+    assert set(statuses(sales).values()) == {"extracted"}
+    assert episodes_count() == 3 and sales[db.SKILLS].count_documents({}) == 0
+
+
+def test_run_with_auto_draft_drafts_from_turns_arriving_on_the_stream(fake_llm, sales, monkeypatch):
+    just_now = datetime.now(timezone.utc) - timedelta(seconds=1)
+    sales[db.SESSIONS].insert_many([make_turn(t, u, a, b, ts=just_now) for t, u, a, b in PERIODS])
+    arrived = list(sales[db.SESSIONS].find())
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", lambda self, pipeline: FakeStream(arrived), raising=False)
+    learning.run(auto_draft=True)
+    assert [(s["status"], s["drafted_by"]) for s in skills.list_all()] == [("draft", "learning_worker")]
+
+
 # ---------- where a skill came from ----------
 
 def test_skill_list_says_where_each_skill_came_from(ready_cluster, mock_db):
@@ -458,6 +539,31 @@ def test_only_published_skills_are_offered_and_retire_withdraws_them(ready_clust
     assert skills.offered_to(alex) == []
     (event,) = [e for e in audit.recent() if e["action"] == "skill_retire"]
     assert event["details"] == {"reason": "No longer used"}
+
+
+def test_a_stale_skill_is_withdrawn_until_the_reviewer_publishes_it_again(ready_cluster):
+    fatima, alex = get_user("fatima"), get_user("alex")
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(fatima, name)
+    assert skills.mark_stale_for_metric("return_rate", 2) == [name]  # what approving Return rate v2 triggers
+    assert skills.offered_to(alex) == []
+    with pytest.raises(GuardError):
+        skills.render_for(alex, name, {"start": "2026-09-01", "end": "2026-10-01"})
+    (listed,) = skills.list_all()
+    assert (listed["status"], listed["stale_reason"]) == ("stale", "return_rate has a new version v2")
+    skills.publish(fatima, name)  # the reviewer confirms it still holds
+    assert [s["name"] for s in skills.offered_to(alex)] == [name]
+
+
+def test_a_turn_answered_by_a_skill_is_not_learned_from_again(ready_cluster, fake_llm, mock_db):
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(get_user("fatima"), name)
+    calls = len(fake_llm.calls)
+    mock_db[db.SESSIONS].insert_one(make_turn("s_d_t1", "alex", pipeline="[]", skill={
+        "name": name, "parameters": {"start": "2026-08-01", "end": "2026-09-01"}}))
+    learning.backlog()
+    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_d_t1"})["episode_status"] == "skipped: the turn reused a skill"
+    assert episodes_count() == 3 and len(fake_llm.calls) == calls  # no new episode, no model call
 
 
 def test_render_for_fills_a_published_template(ready_cluster):

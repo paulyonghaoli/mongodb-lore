@@ -28,6 +28,7 @@ cp .env.example .env        # fill in MONGODB_URI, ANTHROPIC_API_KEY, VOYAGE_API
 
 ```bash
 uvicorn app.main:app --reload               # http://localhost:8000
+python -m app.workers.learning --auto-draft # optional, second terminal: the learning worker (see "How learning works")
 ```
 
 **The database is empty** (your own cluster): load it once, then start the app as above.
@@ -37,8 +38,7 @@ python -m scripts.generate_sales --drop     # ~243k sales docs (add --products-p
 python -m scripts.setup_indexes             # regular + memory_vec / episode_vec Vector Search indexes
 python -m scripts.seed_memories --reset     # starting memories, incl. the deliberately wrong net margin
 uvicorn app.main:app --reload               # http://localhost:8000
-python -m app.workers.learning              # optional: turns newly answered questions into episodes (change stream)
-python -m app.workers.learning --backlog    # the same, plus older questions never processed (one model call each)
+python -m app.workers.learning --auto-draft # optional, second terminal: the learning worker (see "How learning works")
 python -m scripts.monthly_memory_review     # previous month; creates reviewer queues and pending memory proposals
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
@@ -58,7 +58,7 @@ that user's role, row filter and hidden fields, and every request is sent as tha
 | --- | --- |
 | Analyst | Ask a question. The card shows the answer, the rows, the permissions applied and the memory in context. |
 | Memory review | Every memory by status. The reviewer (Fatima) approves, rejects, expires and forgets. Other users see only the memories visible to their role. |
-| Skills | Episode clusters and the skill library. The reviewer drafts a skill from a ready cluster, then publishes or retires it. |
+| Skills | Episode clusters and the skill library. A skill is drafted from a ready cluster, by the reviewer or by the learning worker, and the reviewer publishes or retires it. |
 | Audit log | Every query and every change to memory or skills. The reviewer sees all events, other users their own. |
 
 The **Question templates** under the ask box hold the demo questions; a template with a name on it signs in
@@ -85,6 +85,61 @@ as sample data.
 5. Code runs the pipeline, Claude explains the permitted rows, and the session turn (no result rows)
    and an audit event are saved.
 
+## How learning works
+
+Repeated analyses become skills. Nothing on this path stores result rows. An episode and a skill hold the
+method, meaning the query and its parameters, so a skill always runs with the permissions of whoever uses it.
+
+1. **Question to episode.** The learning worker watches the `sessions` collection through an Atlas change
+   stream. For each newly answered question, Claude rewrites the turn as an episode: the general intent
+   (`Rank regions by return rate for <period>`), the parameter values and the group fields. An episode is
+   rejected unless every parameter value really appears in the query.
+2. **Episode to cluster.** An episode joins a cluster when its embedding is similar (cosine 0.80 or more)
+   and its structure is identical: the same collection, metrics and metric versions, parameter names and
+   group fields. A cluster is ready at three episodes from two people.
+3. **Cluster to draft.** Claude writes a draft from a recent sample of the cluster (six episodes). The draft
+   is checked before it is saved: valid JSON, a snake_case name, placeholders equal to the declared
+   parameters, and a query the guard allows. The reviewer starts this with **Draft skill**. With
+   `--auto-draft` the worker starts it as soon as a new episode lands in a ready cluster that has never had
+   a skill.
+4. **Tests.** Two tests run on every draft. *Replay*: three of the source queries and the filled-in template
+   must give the same result, compared by value and not by column name. *Permissions*: every user the skill
+   is offered to must get exactly the full result cut down to their rows.
+5. **Publish.** Only the reviewer publishes, and only a draft whose tests passed. Drafting can be automatic.
+   Publishing never is.
+6. **Reuse.** The agent is offered the published skills whose fields the user may read. When it picks one,
+   the template is filled in and still passes through the guard. A question answered by a skill is not
+   learned from again.
+
+Run the worker in a second terminal, next to the app:
+
+```bash
+python -m app.workers.learning               # questions answered from now on
+python -m app.workers.learning --auto-draft  # the same, and draft and test a skill when a cluster is ready
+python -m app.workers.learning --backlog     # also older questions never processed (one model call each)
+```
+
+| The worker | Why |
+| --- | --- |
+| takes only questions answered after it starts | The older ones are mostly test questions. `--backlog` adds them. |
+| claims a turn before it processes it | Several workers can run on one database and still make one episode per turn. |
+| skips the "without memory" run of a comparison | That run ignores the company definitions on purpose. |
+| skips a question that a skill answered | There is nothing new to learn from it. |
+| never drafts again for a cluster that already had a skill | A skill the reviewer retired stays retired. **Draft again** is a manual action. |
+| keeps going when a draft is refused | The episode is already saved, and the refusal is logged. |
+
+Each turn records what became of it in `episode_status`: `extracted`, `skipped: <why>`, `rejected: <why>` or
+`error: <what>`. The Skills tab shows the totals and refreshes while it is open, so a new draft appears
+without a reload. Every draft, publish and retire is in the audit log; a draft the worker made has the actor
+`system`.
+
+Episodes written by `scripts.synthesize_activity` are marked `synthetic` and count toward a cluster like any
+other. The interface labels them as sample data, on clusters and on the skills built from them.
+
+Two things withdraw a published skill. When a metric gets a new version, skills built on the old version
+become `stale` and are not offered until the reviewer publishes them again. When the monthly review deletes
+a query, its episode is deleted and the skills that depended on it are retired.
+
 ## Layout
 
 ```
@@ -100,7 +155,7 @@ app/
   llm.py             Anthropic SDK wrapper (one model ID from LORE_MODEL)
   agent.py           plan -> guard -> run -> explain -> save turn
   skills.py          episodes, clustering, skill drafting/testing/publishing
-  workers/learning.py   change-stream worker: session turn -> episode
+  workers/learning.py   change-stream worker: answered turn -> episode, and optionally a skill draft
   routes/            ask.py, memories.py, skills.py, audit.py (one router per workstream)
 web/                 index.html, app.js, style.css: analyst, memory review, skills and audit views
 scripts/             generate_sales, setup_indexes, seed_memories, synthesize_activity, check_data,
@@ -123,7 +178,7 @@ All calls send `X-User: fatima | alex | sam`.
 | POST | `/api/memory-review/items/{item_id}/delete` · `/retain` | Reviewer confirms query deletion / memory forgetting, or keeps the item |
 | GET | `/api/skills` · `/api/skills/clusters` | Skill library and episode clusters |
 | GET | `/api/skills/clusters/{id}/episodes` · `/api/skills/learning` | The questions behind a cluster (reviewer only); what became of answered turns |
-| POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (manual trigger), publish, retire |
+| POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (reviewer; the worker can also draft with `--auto-draft`), publish, retire |
 | GET | `/api/audit` | Recent audit events (reviewers see all; others see their own) |
 
 ## Workstreams
@@ -135,7 +190,7 @@ Framework only: each piece runs end to end at a starter level. Owners take it fr
 | Data and access | Jimmy | `scripts/generate_sales.py`, `scripts/expected_answers.py`, `app/guard.py`, `app/audit.py`, `app/users.json` | Tune the generator so the planted patterns are clear; fill expected answers for all 8 demo questions; create the read-only Atlas user; confirm Sandbox vector index limit |
 | Analyst agent | Paul | `app/agent.py`, `app/llm.py`, `app/routes/ask.py`, `scripts/run_eval.py` | Run demo questions 1–8 end to end; tune prompts until accuracy holds; make the replay show a different query and answer |
 | Memory governance | Chloe | `app/memory.py`, `app/routes/memories.py`, `scripts/seed_memories.py` | Verify Vector Search filters on the Sandbox; confirm the visibility rule for proposals; leak tests through memory |
-| Skills and interface | Yue | `app/skills.py`, `app/workers/learning.py`, `app/routes/skills.py`, `web/` | Generate 3 episodes from 2 users, draft and publish one skill; polish the analyst and reviewer views for the demo |
+| Skills and interface | Yue | `app/skills.py`, `app/workers/learning.py`, `app/routes/skills.py`, `web/` | Running end to end on the Sandbox: the learning worker turns new questions into episodes, the reviewer drafts a skill from a ready cluster, the replay and permission tests run, and a published skill is reused by the agent. Left: rehearse the demo path from the interface |
 
 Checkpoint: by **1:00 PM**, two roles get correctly different answers from the same question.
 

@@ -10,7 +10,7 @@ ACTIONS = {
     "memory_propose", "memory_approve", "memory_reject",
     "memory_expire", "memory_forget",
     "query_delete", "review_retain",
-    "skill_publish", "skill_retire",
+    "skill_draft", "skill_publish", "skill_retire",
 }
 
 
