@@ -20,6 +20,7 @@ const TEMPLATES = [
   ] },
   { group: "Who can see what", hint: "Then use Compare: Across all roles", items: [
     { q: "Return rate by region in Q3" },
+    { q: "Why did East's return rate rise in Q3?" },
     { q: "Which of my stores lost margin since July?", as: "sam" },
     { q: "What is our supplier cost for footwear?", as: "sam" },
     { q: "Why is footwear margin lower than other categories?", as: "fatima" },
