@@ -2,7 +2,7 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 pymongo>=4.8
 anthropic>=2.0
-voyageai>=0.3
+voyageai>=0.6  # routes Atlas-issued "al-" keys to ai.mongodb.com
 pydantic>=2.7
 pydantic-settings>=2.3
 # dev

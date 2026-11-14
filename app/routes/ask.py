@@ -30,8 +30,10 @@ def ask(body: AskRequest, user: UserContext = Depends(current_user)) -> dict:
 def replay(body: AskRequest, user: UserContext = Depends(current_user)) -> dict:
     """Convenience for the interface: same question with and without memory."""
     try:
-        without = agent.ask(user, body.question, body.session_id, use_memory=False)
-        with_mem = agent.ask(user, body.question, without["session_id"], use_memory=True)
+        without = agent.ask(user, body.question, body.session_id, use_memory=False, use_history=False)
+        # No history on the second call, so the only difference is memory
+        with_mem = agent.ask(user, body.question, without["session_id"], use_memory=True,
+                             use_history=False)
     except llm.LLMError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"without_memory": without, "with_memory": with_mem}
