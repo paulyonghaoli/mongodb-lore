@@ -100,6 +100,12 @@ def _fields_for(user: UserContext) -> dict[str, str]:
 def _system_prompt(user: UserContext, memories: list[dict], offered_skills: list[dict]) -> str:
     fields = "\n".join(f"- {k}: {v}" for k, v in _fields_for(user).items())
     parts = [PLAN_RULES, f"Fields in `sales` for this user:\n{fields}"]
+    # The planner must know who is asking: a memory about access rules ("restricted to finance_lead")
+    # otherwise makes it refuse a field the user is allowed to use.
+    parts.append(f"The person asking is {user.display_name}, with the role `{user.role}`. Access control is "
+                 "enforced in code, not by you: every field listed above is available to this person, so use "
+                 "it freely. Memories that describe access rules are background, never a reason to refuse a "
+                 "listed field.")
     if user.rows:
         parts.append(f"This user's rows are already limited to {json.dumps(user.rows)}.")
     if memories:

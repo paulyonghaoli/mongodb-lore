@@ -181,3 +181,12 @@ def test_unavailable_skill_is_a_clean_rejection(sales, scripted_llm):
     res = agent.ask(get_user("alex"), "Revenue", use_memory=True)
     assert res["outcome"] == "rejected"
     assert "not available" in res["answer"]
+
+
+def test_planner_is_told_who_is_asking(sales, fake_llm):
+    """A memory about access rules must not make the agent refuse a field the user may use."""
+    agent.ask(get_user("fatima"), "Net margin by region", use_memory=False)
+    agent.ask(get_user("sam"), "Revenue by region", use_memory=False)
+    plans = [c["system"] for c in fake_llm if c["schema"] is not None]
+    assert "role `finance_lead`" in plans[0] and "- supplier_cost:" in plans[0]
+    assert "role `store_manager`" in plans[1] and "- supplier_cost:" not in plans[1]
