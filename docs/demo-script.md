@@ -26,7 +26,8 @@ rate 34.9%, and the eval at 4/10 → 10/10 with memory.
 1. **Wrong Net margin active** for all roles (the correction must still be possible). After any
    rehearsal that approves a correction, put the wrong definition back as a new version
    (propose + approve as Fatima); approving an older version is blocked.
-2. **Learning worker running** (`python -m app.workers.learning`) if you show the skill demo.
+2. **Learning worker running** (`python -m app.workers.learning`, add `--auto-draft` to have it
+   draft the skill by itself) if you show the skill demo.
 3. **Skill demo prep** (skill demo only): Alex asks "Units sold by category in August" and Sam asks
    "Units sold by category in September". The Skills tab should show that cluster at
    2 episodes, not ready.
@@ -120,6 +121,8 @@ query. Two isn't enough to trust yet."
 *(Skills tab)* Three episodes from three people: the cluster is ready."
 
 **3:05 · [Draft skill]**
+If the worker runs with `--auto-draft`, the draft appears on its own once the cluster is ready; then
+say "The worker drafted it automatically; a reviewer still has to publish it." Otherwise:
 "She drafts it. Claude turns the three queries into one template with the month as a parameter.
 *Lore tests it before anyone can use it: it replays the original questions and checks the numbers
 match, then runs it as every role to make sure nobody sees more than they should. A skill stores
