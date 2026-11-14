@@ -1,8 +1,128 @@
+"""Skills workstream, offline: mongomock, hash embeddings and a fake LLM.
+
+session turn -> episode -> cluster -> draft skill -> tests -> publish / retire -> offered to the agent.
+"""
+import json
+import re
 from datetime import datetime, timezone
 
-from app import db, skills
-from app.users import get_user
+import pytest
+from bson import json_util
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
+from app import audit, db, embeddings, llm, skills
+from app.guard import GuardError
+from app.main import app
+from app.users import get_user
+from app.workers import learning
+
+
+def day(s: str) -> datetime:
+    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+
+
+def rate_pipeline(start, end, group: str = "category") -> list[dict]:
+    """Return rate by one field for a period, in the shape the agent writes (no $round: mongomock lacks it)."""
+    return [
+        {"$match": {"date": {"$gte": start, "$lt": end}}},
+        {"$group": {"_id": f"${group}", "revenue": {"$sum": "$revenue"}, "returns": {"$sum": "$returns"}}},
+        {"$project": {"_id": 0, group: "$_id", "return_rate": {"$divide": ["$returns", "$revenue"]}}},
+        {"$sort": {group: 1}},
+    ]
+
+
+def make_turn(turn_id: str, user_id: str, start: str = "2026-09-01", end: str = "2026-10-01",
+              group: str = "category", **over) -> dict:
+    """A session turn as app/agent.py saves it."""
+    turn = {
+        "session_id": turn_id.rsplit("_t", 1)[0], "turn_id": turn_id, "user_id": user_id,
+        "role": get_user(user_id).role, "question": f"Return rate by {group} from {start} to {end}",
+        "used_memory": True, "memory_ids": ["mem_return_rate_v1"], "skill": None, "collection": "sales",
+        "pipeline": json_util.dumps(rate_pipeline(day(start), day(end), group)),
+        "metrics_used": ["return_rate@1"], "outcome": "answered", "ts": datetime.now(timezone.utc),
+    }
+    turn.update(over)
+    return turn
+
+
+class FakeLLM:
+    """Stands in for llm.complete. Answers the episode and the skill prompts from what it is sent."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.episode: dict = {}        # fields to override in the episode answer
+        self.template: list | None = None  # template to return instead of the faithful one
+
+    def __call__(self, system, messages, usage, schema=None, **kw):
+        self.calls.append({"system": system, "messages": messages, "schema": schema})
+        payload = json.loads(messages[0]["content"])
+        if schema is skills.EPISODE_SCHEMA:
+            start, end = re.findall(r"\d{4}-\d{2}-\d{2}", payload["pipeline"])[:2]
+            group = re.search(r'"_id": "\$(\w+)"', payload["pipeline"]).group(1)
+            return {"intent": f"Rank {group} by return rate for <period>",
+                    "parameters_json": json.dumps({"start": start, "end": end}),
+                    "method": ["Filter to the period", f"Group by {group}", "Divide returns by revenue"],
+                    "group_fields": [group], **self.episode}
+        if schema is skills.SKILL_SCHEMA:
+            group = re.search(r'"_id": "\$(\w+)"', payload[0]["pipeline"]).group(1)
+            return {"name": f"return_rate_by_{group}", "description": f"Return rate by {group} for a date range",
+                    "parameters_json": json.dumps({"start": "ISO date, inclusive", "end": "ISO date, exclusive"}),
+                    "pipeline_template_json": json.dumps(self.template or rate_pipeline("{{start}}", "{{end}}", group))}
+        raise AssertionError("unexpected prompt")
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    fake = FakeLLM()
+    monkeypatch.setattr(llm, "complete", fake)
+    return fake
+
+
+@pytest.fixture
+def sales(mock_db, monkeypatch):
+    """A little sales data whose return rate differs by month, region and category."""
+    mock_db[db.SALES].insert_many([
+        {"date": day(f"2026-{month:02d}-05"), "store_id": region[0] + "00", "store_name": f"{region} store",
+         "region": region, "category": category, "product": "tent", "units": 2, "revenue": 100.0,
+         "returns": float(month + 3 * r + 7 * c), "supplier_cost": 50.0, "discount": 0.0}
+        for month in (8, 9, 10) for r, region in enumerate(("East", "West")) for c, category in enumerate(("Camping", "Home"))
+    ])
+    # mongomock lacks $unset; swap in the equivalent $project exclusion (same trick as tests/test_agent.py)
+    real_guard = skills.guard_pipeline
+
+    def guard(*a, **kw):
+        safe, gov = real_guard(*a, **kw)
+        return [{"$project": {f: 0 for f in s["$unset"]}} if "$unset" in s else s for s in safe], gov
+
+    monkeypatch.setattr(skills, "guard_pipeline", guard)
+    return mock_db
+
+
+PERIODS = [("s_a_t1", "alex", "2026-09-01", "2026-10-01"), ("s_b_t1", "sam", "2026-08-01", "2026-09-01"),
+           ("s_c_t1", "fatima", "2026-10-01", "2026-11-01")]
+
+
+@pytest.fixture
+def ready_cluster(fake_llm, sales) -> str:
+    """Three episodes of the same analysis from three users."""
+    for turn_id, user_id, start, end in PERIODS:
+        skills.extract_episode(make_turn(turn_id, user_id, start, end))
+    (cluster,) = skills.clusters()
+    assert cluster["ready"]
+    return cluster["cluster_id"]
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+def episodes_count() -> int:
+    return db.app_db()[db.EPISODES].count_documents({})
+
+
+# ---------- rendering, offering, staleness ----------
 
 def test_render_replaces_params_and_dates():
     tpl = [{"$match": {"date": {"$gte": "{{start}}", "$lt": "{{end}}"}, "region": "{{region}}"}}]
@@ -25,3 +145,209 @@ def test_new_metric_version_marks_skill_stale():
                                        "required_fields": [], "metric_versions": {"net_margin": 1}})
     assert skills.mark_stale_for_metric("net_margin", 2) == ["s"]
     assert db.app_db()[db.SKILLS].find_one({"name": "s"})["status"] == "stale"
+
+
+# ---------- session turn -> episode ----------
+
+def test_answered_turn_becomes_episode(fake_llm):
+    ep = skills.extract_episode(make_turn("s_a_t1", "alex"))
+    assert (ep["turn_id"], ep["user_id"]) == ("s_a_t1", "alex")
+    assert ep["intent"] == "Rank category by return rate for <period>"
+    assert ep["parameters"] == {"start": "2026-09-01", "end": "2026-10-01"}
+    assert ep["structure"] == {"collection": "sales", "metrics": ["return_rate@1"],
+                               "parameter_names": ["end", "start"], "group_fields": ["category"]}
+    assert ep["cluster_id"].startswith("c_")
+    assert "embedding" not in ep  # the returned view never carries the vector
+    stored = db.app_db()[db.EPISODES].find_one({"turn_id": "s_a_t1"})
+    assert stored["embedding"] and stored["embed_model"].startswith("hash-")
+    assert stored["pipeline"] == make_turn("s_a_t1", "alex")["pipeline"]  # the method is kept, never the rows
+
+
+@pytest.mark.parametrize("change", [
+    {"outcome": "rejected"},                       # blocked by the guard
+    {"outcome": "failed"},                         # the query did not run
+    {"skill": {"name": "x", "parameters": {}}},    # the turn reused a skill: nothing new to learn
+])
+def test_turns_that_never_become_episodes(fake_llm, change):
+    assert skills.extract_episode(make_turn("s_a_t1", "alex", **change)) is None
+    assert fake_llm.calls == []  # decided before any model call
+    assert episodes_count() == 0
+
+
+def test_episode_rejected_when_a_parameter_value_is_not_in_the_pipeline(fake_llm):
+    fake_llm.episode = {"parameters_json": json.dumps({"start": "2026-09-01", "end": "2026-10-01", "region": "East"})}
+    assert skills.extract_episode(make_turn("s_a_t1", "alex")) is None
+    assert episodes_count() == 0
+
+
+# ---------- clustering ----------
+
+def test_same_analysis_for_another_period_joins_the_cluster(fake_llm):
+    a = skills.extract_episode(make_turn("s_a_t1", "alex", "2026-09-01", "2026-10-01"))
+    b = skills.extract_episode(make_turn("s_b_t1", "sam", "2026-08-01", "2026-09-01"))
+    assert a["cluster_id"] == b["cluster_id"]
+
+
+def test_different_group_field_starts_a_new_cluster(fake_llm):
+    a = skills.extract_episode(make_turn("s_a_t1", "alex", group="category"))
+    b = skills.extract_episode(make_turn("s_b_t1", "sam", group="region"))
+    assert a["cluster_id"] != b["cluster_id"]
+    # The wording alone is similar enough to merge them; the structure key is what keeps them apart.
+    vec = {e["turn_id"]: e["embedding"] for e in db.app_db()[db.EPISODES].find()}
+    assert embeddings.cosine(vec["s_a_t1"], vec["s_b_t1"]) >= skills.SIMILARITY_THRESHOLD
+
+
+def test_different_metric_version_starts_a_new_cluster(fake_llm):
+    a = skills.extract_episode(make_turn("s_a_t1", "alex"))
+    b = skills.extract_episode(make_turn("s_b_t1", "sam", metrics_used=["return_rate@2"]))
+    assert a["cluster_id"] != b["cluster_id"]
+
+
+def test_cluster_is_ready_at_three_episodes_from_two_users(fake_llm):
+    skills.extract_episode(make_turn("s_a_t1", "alex", "2026-09-01", "2026-10-01"))
+    skills.extract_episode(make_turn("s_a_t2", "alex", "2026-08-01", "2026-09-01"))
+    assert [c["ready"] for c in skills.clusters()] == [False]  # two episodes
+    skills.extract_episode(make_turn("s_a_t3", "alex", "2026-10-01", "2026-11-01"))
+    assert [c["ready"] for c in skills.clusters()] == [False]  # three episodes, one user
+    skills.extract_episode(make_turn("s_b_t1", "sam", "2026-09-01", "2026-10-01"))
+    (cluster,) = skills.clusters()
+    assert cluster["ready"] and cluster["episodes"] == 4 and sorted(cluster["users"]) == ["alex", "sam"]
+
+
+# ---------- drafting and testing ----------
+
+def test_generate_needs_a_ready_cluster(fake_llm):
+    skills.extract_episode(make_turn("s_a_t1", "alex"))
+    with pytest.raises(HTTPException) as e:
+        skills.generate()
+    assert e.value.status_code == 409
+
+
+def test_draft_from_ready_cluster(ready_cluster):
+    s = skills.generate(ready_cluster)
+    assert (s["name"], s["version"], s["status"], s["reviewed_by"]) == ("return_rate_by_category", 1, "draft", None)
+    assert s["parameters"] == {"start": "ISO date, inclusive", "end": "ISO date, exclusive"}
+    assert s["required_fields"] == ["category", "date", "returns", "revenue"]
+    assert s["metric_versions"] == {"return_rate": 1}
+    assert s["cluster_id"] == ready_cluster and len(s["source_episodes"]) == 3
+    assert json.loads(s["pipeline_template"])[0]["$match"]["date"] == {"$gte": "{{start}}", "$lt": "{{end}}"}
+    assert s["test_results"] == {"replay": "pass", "permissions": "pass"}
+
+
+def test_replay_test_fails_when_the_template_changes_the_result(ready_cluster, fake_llm):
+    fake_llm.template = rate_pipeline("{{start}}", "{{end}}", "region")  # groups by the wrong field
+    s = skills.generate(ready_cluster)
+    assert s["test_results"]["replay"] == "fail"
+
+
+def test_generating_again_gives_the_next_version(ready_cluster):
+    assert skills.generate(ready_cluster)["version"] == 1
+    assert skills.generate(ready_cluster)["version"] == 2
+
+
+# ---------- publishing, retiring, offering ----------
+
+def test_draft_with_failed_tests_cannot_be_published(ready_cluster, fake_llm):
+    fake_llm.template = rate_pipeline("{{start}}", "{{end}}", "region")
+    s = skills.generate(ready_cluster)
+    with pytest.raises(HTTPException) as e:
+        skills.publish(get_user("fatima"), s["name"])
+    assert e.value.status_code == 409
+    assert db.app_db()[db.SKILLS].find_one({"name": s["name"]})["status"] == "draft"
+
+
+def test_publish_records_reviewer_retires_older_version_and_audits(ready_cluster):
+    fatima = get_user("fatima")
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(fatima, name)
+    skills.generate(ready_cluster)
+    out = skills.publish(fatima, name)
+    assert (out["version"], out["status"], out["reviewed_by"]) == (2, "published", "fatima")
+    assert {s["version"]: s["status"] for s in skills.list_all()} == {1: "retired", 2: "published"}
+    events = [e for e in audit.recent() if e["action"] == "skill_publish"]
+    assert len(events) == 2
+    assert all(e["actor"] == "fatima" and e["target"] == {"kind": "skill", "id": name} for e in events)
+
+
+def test_publish_unknown_skill_is_404():
+    with pytest.raises(HTTPException) as e:
+        skills.publish(get_user("fatima"), "no_such_skill")
+    assert e.value.status_code == 404
+
+
+def test_only_published_skills_are_offered_and_retire_withdraws_them(ready_cluster):
+    fatima, alex = get_user("fatima"), get_user("alex")
+    name = skills.generate(ready_cluster)["name"]
+    assert skills.offered_to(alex) == []  # a draft is never offered
+    skills.publish(fatima, name)
+    assert [s["name"] for s in skills.offered_to(alex)] == [name]
+    skills.retire(fatima, name, "No longer used")
+    assert skills.offered_to(alex) == []
+    (event,) = [e for e in audit.recent() if e["action"] == "skill_retire"]
+    assert event["details"] == {"reason": "No longer used"}
+
+
+def test_render_for_fills_a_published_template(ready_cluster):
+    name = skills.generate(ready_cluster)["name"]
+    skills.publish(get_user("fatima"), name)
+    pipeline = skills.render_for(get_user("alex"), name, {"start": "2026-09-01", "end": "2026-10-01"})
+    assert pipeline[0]["$match"]["date"] == {"$gte": day("2026-09-01"), "$lt": day("2026-10-01")}
+
+
+def test_render_for_refuses_a_draft_and_a_missing_parameter(ready_cluster):
+    alex = get_user("alex")
+    name = skills.generate(ready_cluster)["name"]
+    with pytest.raises(GuardError):
+        skills.render_for(alex, name, {"start": "2026-09-01", "end": "2026-10-01"})
+    skills.publish(get_user("fatima"), name)
+    with pytest.raises(GuardError):
+        skills.render_for(alex, name, {"start": "2026-09-01"})
+
+
+# ---------- routes ----------
+
+def test_only_the_reviewer_can_publish_or_retire(ready_cluster, client):
+    name = skills.generate(ready_cluster)["name"]
+    assert client.post(f"/api/skills/{name}/publish", headers={"X-User": "alex"}).status_code == 403
+    assert client.post(f"/api/skills/{name}/retire", json={"reason": "x"}, headers={"X-User": "sam"}).status_code == 403
+    res = client.post(f"/api/skills/{name}/publish", headers={"X-User": "fatima"})
+    assert res.status_code == 200 and res.json()["status"] == "published"
+
+
+def test_skill_list_tells_each_user_whether_the_skill_is_offered(client):
+    db.app_db()[db.SKILLS].insert_one({
+        "name": "footwear_cost_share", "version": 1, "status": "published", "description": "", "parameters": {},
+        "required_fields": ["category", "supplier_cost"], "pipeline_template": "[]", "metric_versions": {}})
+    offered = {u: client.get("/api/skills", headers={"X-User": u}).json()["skills"][0]["offered_to_you"]
+               for u in ("fatima", "alex", "sam")}
+    assert offered == {"fatima": True, "alex": False, "sam": False}
+
+
+def test_clusters_route_lists_readiness(ready_cluster, client):
+    (cluster,) = client.get("/api/skills/clusters", headers={"X-User": "alex"}).json()
+    assert cluster["cluster_id"] == ready_cluster and cluster["ready"] and cluster["episodes"] == 3
+
+
+# ---------- learning worker ----------
+
+def test_worker_extracts_answered_turns_once(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_many([make_turn("s_a_t1", "alex"), make_turn("s_b_t1", "sam", outcome="rejected")])
+    learning.backlog()
+    status = {t["turn_id"]: t.get("episode_status") for t in mock_db[db.SESSIONS].find()}
+    assert status == {"s_a_t1": "extracted", "s_b_t1": None}  # the backlog only looks at answered turns
+    learning.backlog()
+    assert episodes_count() == 1  # a processed turn is not picked up again
+
+
+def test_worker_marks_a_rejected_extraction(fake_llm, mock_db):
+    fake_llm.episode = {"parameters_json": json.dumps({"start": "1999-01-01", "end": "2026-10-01"})}
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
+    learning.backlog()
+    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"] == "rejected"
+
+
+def test_worker_keeps_going_after_a_turn_fails(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_many([make_turn("s_a_t1", "alex", pipeline="not json"), make_turn("s_b_t1", "sam")])
+    learning.backlog()
+    status = {t["turn_id"]: t["episode_status"] for t in mock_db[db.SESSIONS].find()}
+    assert status["s_a_t1"].startswith("error:") and status["s_b_t1"] == "extracted"
