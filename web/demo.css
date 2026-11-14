@@ -83,6 +83,12 @@ h3 { font-size: 1.05em; margin-bottom: .4em; }
 .eval th { color: var(--muted); font-weight: 600; font-size: .8em; }
 .eval td:not(:first-child) { font-size: 1.3em; }
 
+.answer-line { font-size: 1.3em; max-width: 44em; margin: 0 0 3vh; }
+.atlas { display: inline-block; align-self: flex-start; border: 1.5px solid var(--accent); background: var(--accent-soft);
+  border-radius: 10px; padding: .6em 1em; margin-bottom: 4vh; font-size: .92em; max-width: 60em; }
+.atlas span { display: inline-block; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .07em;
+  font-size: .78em; margin-right: 1em; }
+
 /* ---------- buttons ---------- */
 .actions { display: flex; gap: .8em; flex-wrap: wrap; }
 .actions.center { justify-content: center; }
@@ -114,7 +120,9 @@ button { font: inherit; cursor: pointer; }
 #live-close { margin-left: auto; flex: none; background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 999px;
   padding: 6px 14px; font-weight: 650; font-size: 14px; }
 kbd { font: 11px ui-monospace, monospace; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 4px; opacity: .8; }
-#live-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
+#live-frames { flex: 1; display: flex; min-height: 0; }
+.live-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
+.live-frame[hidden] { display: none; }
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 900px) {

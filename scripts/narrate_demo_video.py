@@ -11,19 +11,19 @@ import edge_tts, imageio_ffmpeg
 
 F = pathlib.Path(sys.argv[1]); SRC, DST = sys.argv[2], sys.argv[3]
 VOICE = sys.argv[4] if len(sys.argv) > 4 else "en-US-AndrewNeural"
-ORDER = ["title", "problem", "roles", "wrong", "correct", "approve", "fixed", "skills", "proof"]
-LINES = {
-    "title": "Lore is shared memory for analyst agents, governed by people.",
-    "problem": "Agents forget definitions, lose corrections, and overshare data.",
-    "roles": "One question, three roles. Finance sees every region. Sam, the East manager, sees only East. "
-             "A query guard enforces each user's permissions.",
-    "wrong": "Shared memory holds a wrong definition. Every agent says East's margin is a healthy thirty-six percent.",
-    "correct": "Fatima, the finance lead, corrects it. The agent files a proposal. Memory does not change yet.",
-    "approve": "A reviewer approves it for every role. The old version is kept, and every step is audited.",
-    "fixed": "Now any agent asks again, and gets the truth: one point seven percent.",
-    "skills": "Repeated questions become tested, reviewed skills.",
-    "proof": "Accuracy with memory went from four out of ten, to ten out of ten. Lore. Built on MongoDB Atlas.",
-}
+# One narration line per block of scenes; the line starts with the block's first scene.
+BLOCKS = [
+    (["title"], "Lore: memory you can govern, on MongoDB Atlas."),
+    (["q1", "leak"], "Question one: no leaks between teams. Three roles ask one question. The store memory reaches "
+                     "Finance and the store manager, never the analyst. Role rules are Atlas Vector Search filters."),
+    (["q2", "wrong"], "Question two: fixing a wrong memory. Shared memory says East's margin is thirty-six percent."),
+    (["correct"], "Fatima corrects it. The agent files a new version, as a proposal."),
+    (["approve"], "A reviewer approves it. The old version is kept, and every step is audited."),
+    (["fixed"], "Now every agent says one point seven percent."),
+    (["q3", "replay"], "Question three: proof. The same question, replayed with and without memory, gives a "
+                       "different query, and a different result."),
+    (["atlas"], "Vector Search, Voyage A I, aggregation and change streams: one MongoDB Atlas cluster."),
+]
 ff = imageio_ffmpeg.get_ffmpeg_exe()
 
 def dur(path):
@@ -32,24 +32,24 @@ def dur(path):
     return int(h) * 3600 + int(m) * 60 + float(s)
 
 async def tts():
-    for name, text in LINES.items():
-        for attempt in range(5):
+    for i, (_, text) in enumerate(BLOCKS):
+        for attempt in range(8):
             try:
-                await edge_tts.Communicate(text, VOICE, rate="+4%").save(str(F / f"vo_{name}.mp3")); break
-            except Exception as e:
-                if attempt == 4: raise
-                await asyncio.sleep(1.5)
+                await edge_tts.Communicate(text, VOICE, rate="+0%").save(str(F / f"vo_{i}.mp3")); break
+            except Exception:
+                if attempt == 7: raise
+                await asyncio.sleep(3)
 asyncio.run(tts())
 
 inputs, filters, labels, t = ["-i", SRC], [], [], 0.0
-for i, name in enumerate(ORDER, 1):
-    slot = sum(d for _, d in json.loads((F / f"{name}.json").read_text()))
-    clip = F / f"vo_{name}.mp3"; d = dur(clip)
+for i, (scenes, _) in enumerate(BLOCKS):
+    slot = sum(d for name in scenes for _, d in json.loads((F / f"{name}.json").read_text()))
+    clip = F / f"vo_{i}.mp3"; d = dur(clip)
     tempo = min(1.3, max(1.0, d / (slot - 0.35)))
-    print(f"{name:8} start {t:5.1f}s  slot {slot:4.1f}s  speech {d:4.1f}s  tempo x{tempo:.2f}")
+    print(f"{'+'.join(scenes):12} start {t:5.1f}s  slot {slot:4.1f}s  speech {d:4.1f}s  tempo x{tempo:.2f}")
     inputs += ["-i", str(clip)]
     ms = int((t + 0.15) * 1000)
-    filters.append(f"[{i}:a]atempo={tempo:.3f},adelay={ms}|{ms}[a{i}]"); labels.append(f"[a{i}]")
+    filters.append(f"[{i + 1}:a]atempo={tempo:.3f},adelay={ms}|{ms}[a{i}]"); labels.append(f"[a{i}]")
     t += slot
 filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:normalize=0,alimiter=limit=0.95[a]")
 subprocess.run([ff, "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(filters),

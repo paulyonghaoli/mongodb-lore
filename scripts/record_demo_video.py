@@ -15,7 +15,7 @@ import time
 
 BASE = "http://localhost:8000"
 W, H, SCALE = 1280, 720, 1.5
-ORDER = ["title", "problem", "roles", "wrong", "correct", "approve", "fixed", "skills", "proof"]
+ORDER = ["title", "q1", "leak", "q2", "wrong", "correct", "approve", "fixed", "q3", "replay", "atlas"]
 
 OUT = pathlib.Path(sys.argv[1])
 OUT.mkdir(parents=True, exist_ok=True)
@@ -59,6 +59,8 @@ class Scene:
     def goto(self, url):
         self.page.goto(BASE + url)
         self.page.wait_for_load_state("networkidle")
+        if url.startswith("/demo"):
+            time.sleep(0.7)  # let the slide's enter animation finish
         self.setup()
 
     def caption(self, html):
@@ -124,39 +126,83 @@ Q_MARGIN = "What was net margin by region in Q3?"
 
 def scene_title(s):
     s.goto("/demo?full#1")
-    s.caption("Shared memory for analyst agents, <b>governed by people</b>")
-    s.snap(4.0)
+    s.caption("Memory you can govern, built on <b>MongoDB Atlas</b>")
+    s.snap(3.8)
 
 
-def scene_problem(s):
-    s.goto("/demo?full#2")
-    s.caption("Agents forget definitions, lose corrections, and overshare")
-    s.snap(4.5)
+def question_card(s, slide, text):
+    s.goto(f"/demo?full#{slide}")
+    s.page.evaluate("() => document.querySelectorAll('.slide.active .actions').forEach(e => e.style.visibility = 'hidden')")
+    s.caption(text)
+    s.snap(2.2)
 
 
-def scene_roles(s):
-    s.goto("/?user=fatima#analyst")
+def scene_q1(s):
+    question_card(s, 2, "Track question 1: <b>no leaks</b> between teams")
+
+
+def scene_q2(s):
+    question_card(s, 3, "Track question 2: <b>fix or drop</b> a wrong memory")
+
+
+def scene_q3(s):
+    question_card(s, 4, "Track question 3: <b>prove</b> memory changed behavior")
+
+
+CHIPS = "[...document.querySelectorAll('#results .chip')].filter(c => c.textContent.includes('East return window'))"
+
+
+def scene_leak(s):
+    s.goto("/?user=fatima&fresh=1#analyst")
     s.caption("One question, asked by <b>three roles</b>")
-    s.type_question("Return rate by region in Q3")
+    s.type_question("Why did East's return rate rise in Q3?")
     s.click("#roles-btn")
     s.wait_answers()
+    who = s.page.evaluate(f"() => {CHIPS}.map(c => c.closest('.card').querySelector('h3').textContent)")
+    print("cards with the East return window memory:", who)
+    for i, name in enumerate(who):  # one shot per role that received the memory
+        s.ring(f"[{CHIPS}[{i}]]")
+        s.caption(f"<b>{name.split(' (')[0]}</b> gets the East store memory")
+        s.snap(1.5)
+    s.ring("[...document.querySelectorAll('#results .card')].filter(c => c.querySelector('h3').textContent.includes('Alex'))"
+           ".map(c => [...c.querySelectorAll('.box')].find(b => b.textContent.includes('Shared memory')))")
+    s.caption("The analyst's agent <b>never sees it</b>: role rules are Atlas Vector Search filters")
+    s.snap(3.2)
+
+
+def scene_replay(s):
+    s.goto("/?user=fatima&fresh=3#analyst")
+    s.caption("The same question, <b>with and without</b> shared memory")
+    s.type_question("Sales growth by region, August to September")
+    s.click("#replay-btn")
+    s.wait_answers()
     s.page.evaluate("() => document.querySelector('#results').scrollIntoView({block: 'start'})")
-    s.caption("Finance sees every region. <b>Sam, the East manager, sees only East.</b>")
-    s.snap(4.0)
-    s.ring("document.querySelectorAll('#results .box.box-warn')")
-    s.caption("A <b>query guard</b> adds each user's row filter and removes hidden fields")
-    s.snap(4.0)
+    s.ring("document.querySelectorAll('#results .summary, #results > :first-child')")
+    s.caption("Memory changes the <b>query</b> and the <b>result</b>")
+    s.snap(3.2)
+    s.ring("document.querySelectorAll('#results .ln.diff')")
+    s.caption("Without memory: gross revenue. With memory: the agreed <b>net revenue</b> definition")
+    s.snap(3.0)
+
+
+def scene_atlas(s):
+    s.goto("/demo?full#15")
+    s.caption("Vector Search, Voyage AI, aggregation, change streams: <b>one Atlas cluster</b>")
+    s.snap(5.2)
+    s.goto("/demo?full#1")
+    s.caption("<b>Lore</b> · memory you can govern, on MongoDB Atlas")
+    s.snap(1.8)
 
 
 def scene_wrong(s):
-    s.goto("/?user=fatima#analyst")
+    s.goto("/?user=fatima&fresh=2#analyst")
     s.caption("Shared memory holds a <b>wrong definition</b> of net margin")
     s.type_question(Q_MARGIN)
     s.click("#ask-btn")
     s.wait_answers()
     s.ring(EAST_ROWS)
     s.caption("So every agent says East's margin is a healthy <b>36%</b>")
-    s.snap(5.0)
+    s.snap(3.0)
 
 
 def scene_correct(s):
@@ -167,7 +213,7 @@ def scene_correct(s):
     s.wait_answers()
     s.ring("document.querySelectorAll('#results .callout.pending')")
     s.caption("The agent files a <b>proposal</b>. Shared memory does not change yet.")
-    s.snap(5.0)
+    s.snap(3.2)
 
 
 PENDING = "#mem-list .item:has(.status-pending):has(.item-title:text-is('Net margin'))"
@@ -190,46 +236,30 @@ def scene_approve(s):
     print("approving", item.locator(".chip").first.text_content())
     s.caption("A <b>reviewer</b> sees the proposal in Memory review")
     ring_item()
-    s.snap(3.0)
+    s.snap(2.0)
     ring_item()
     item.locator("button[data-act='approve']").evaluate("e => e.classList.add('__input')")
     s.snap(0.5)
     item.locator("button[data-act='approve']").click()
     s.page.wait_for_selector("dialog[open]")
     s.caption("She approves it <b>for every role</b>")
-    s.snap(1.8)
+    s.snap(1.4)
     s.click("#dialog-confirm", hold=0.5)
     s.page.wait_for_function("() => !document.querySelector('dialog[open]')", timeout=60000)
     time.sleep(0.5)
-    s.caption("The old version is superseded. Every step is <b>audited</b>.")
-    s.snap(3.0)
+    s.caption("Old version kept and <b>audited</b>. Expired and forgotten memories are never retrieved.")
+    s.snap(2.4)
 
 
 def scene_fixed(s):
-    s.goto("/?user=fatima#analyst")
+    s.goto("/?user=fatima&fresh=4#analyst")
     s.caption("Now any agent asks the same question…")
     s.type_question(Q_MARGIN)
     s.click("#ask-btn")
     s.wait_answers()
     s.ring(EAST_ROWS)
     s.caption("…and gets the truth: East's margin is <b>1.7%</b>")
-    s.snap(5.0)
-
-
-def scene_skills(s):
-    s.goto("/?user=fatima#skills")
-    time.sleep(1.5)
-    s.caption("Repeated questions become <b>tested, reviewed skills</b>")
-    s.snap(4.0)
-
-
-def scene_proof(s):
-    s.goto("/demo?full#10")
-    s.caption("Accuracy with memory: <b>4/10 → 10/10</b> after one approved correction")
-    s.snap(4.0)
-    s.goto("/demo?full#1")
-    s.caption("<b>Lore</b> · built on MongoDB Atlas and Vector Search")
-    s.snap(3.0)
+    s.snap(3.2)
 
 
 def record(names):
