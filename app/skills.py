@@ -123,30 +123,50 @@ def _structure_key(ep: dict) -> dict:
     }
 
 
-def _values_in_pipeline(params: dict, pipeline_text: str) -> bool:
-    for v in params.values():
+def _missing_values(params: dict, pipeline_text: str) -> list[str]:
+    """Names of the parameters whose value does not appear in the pipeline."""
+    missing = []
+    for name, v in params.items():
         s = str(v)
         if ISO_DATE.match(s):
             s = s[:10]
         if s not in pipeline_text:
-            return False
-    return True
+            missing.append(name)
+    return missing
 
 
-def extract_episode(turn: dict) -> dict | None:
-    """Create an episode from a successful turn. Returns None when rejected."""
-    if turn.get("outcome") not in ("answered", "user_confirmed") or turn.get("skill"):
-        return None
+def skip_reason(turn: dict) -> str | None:
+    """Why a turn is not worth an episode, decided before any model call. None when it is."""
+    if turn.get("outcome") not in ("answered", "user_confirmed"):
+        return f"skipped: outcome is {turn.get('outcome')}"
+    if turn.get("skill"):
+        return "skipped: the turn reused a skill"
+    if turn.get("used_memory") is False:
+        # The "without memory" half of a replay ignores the company definitions on purpose
+        return "skipped: memory was switched off"
+    if db.app_db()[db.EPISODES].find_one({"turn_id": turn["turn_id"]}, {"_id": 1}):
+        return "skipped: already extracted"
+    return None
+
+
+def extract(turn: dict) -> tuple[dict | None, str | None]:
+    """Create an episode from a turn: (episode, None), or (None, why it was skipped or rejected)."""
+    reason = skip_reason(turn)
+    if reason:
+        return None, reason
     usage = llm.Usage()
     raw = llm.complete(EPISODE_RULES, [{"role": "user", "content": json.dumps({
         "question": turn["question"], "pipeline": turn["pipeline"]})}],
         usage, schema=EPISODE_SCHEMA, effort="low", max_tokens=4000)
     params = json.loads(raw["parameters_json"] or "{}")
-    if not _values_in_pipeline(params, turn["pipeline"]):
-        return None  # lesson from the practice build: values must really be filtered on
+    missing = _missing_values(params, turn["pipeline"])
+    if missing:
+        # lesson from the practice build: values must really be filtered on
+        return None, f"rejected: parameter {', '.join(missing)} is not a value in the query"
 
     ep = {
-        "episode_id": f"ep_{uuid.uuid4().hex[:6]}",
+        # One episode per turn: the ID follows the turn, as in scripts/synthesize_activity.py
+        "episode_id": f"ep_{turn['turn_id']}",
         "turn_id": turn["turn_id"],
         "user_id": turn["user_id"],
         "intent": raw["intent"],
@@ -163,7 +183,12 @@ def extract_episode(turn: dict) -> dict | None:
     ep["structure"] = _structure_key(ep)
     ep["cluster_id"] = _assign_cluster(ep)
     db.app_db()[db.EPISODES].insert_one(ep)
-    return _public(ep)
+    return _public(ep), None
+
+
+def extract_episode(turn: dict) -> dict | None:
+    """Create an episode from a successful turn. Returns None when skipped or rejected."""
+    return extract(turn)[0]
 
 
 def _assign_cluster(ep: dict) -> str:

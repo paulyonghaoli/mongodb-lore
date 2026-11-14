@@ -4,12 +4,14 @@ session turn -> episode -> cluster -> draft skill -> tests -> publish / retire -
 """
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import mongomock
 import pytest
 from bson import json_util
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pymongo.errors import OperationFailure
 
 from app import audit, db, embeddings, llm, skills
 from app.guard import GuardError
@@ -167,6 +169,7 @@ def test_answered_turn_becomes_episode(fake_llm):
     {"outcome": "rejected"},                       # blocked by the guard
     {"outcome": "failed"},                         # the query did not run
     {"skill": {"name": "x", "parameters": {}}},    # the turn reused a skill: nothing new to learn
+    {"used_memory": False},                        # the "without memory" half of a replay
 ])
 def test_turns_that_never_become_episodes(fake_llm, change):
     assert skills.extract_episode(make_turn("s_a_t1", "alex", **change)) is None
@@ -178,6 +181,21 @@ def test_episode_rejected_when_a_parameter_value_is_not_in_the_pipeline(fake_llm
     fake_llm.episode = {"parameters_json": json.dumps({"start": "2026-09-01", "end": "2026-10-01", "region": "East"})}
     assert skills.extract_episode(make_turn("s_a_t1", "alex")) is None
     assert episodes_count() == 0
+
+
+def test_one_episode_per_turn_named_after_it(fake_llm):
+    first = skills.extract_episode(make_turn("s_a_t1", "alex"))
+    assert first["episode_id"] == "ep_s_a_t1"
+    again, reason = skills.extract(make_turn("s_a_t1", "alex"))
+    assert again is None and reason == "skipped: already extracted"
+    assert episodes_count() == 1 and len(fake_llm.calls) == 1  # no second model call either
+
+
+def test_extract_says_why_a_turn_gave_no_episode(fake_llm):
+    assert skills.extract(make_turn("s_a_t1", "alex", outcome="rejected"))[1] == "skipped: outcome is rejected"
+    assert skills.extract(make_turn("s_a_t2", "alex", used_memory=False))[1] == "skipped: memory was switched off"
+    fake_llm.episode = {"parameters_json": json.dumps({"start": "2026-09-01", "end": "2026-10-01", "region": "East"})}
+    assert skills.extract(make_turn("s_a_t3", "alex"))[1] == "rejected: parameter region is not a value in the query"
 
 
 # ---------- clustering ----------
@@ -343,7 +361,8 @@ def test_worker_marks_a_rejected_extraction(fake_llm, mock_db):
     fake_llm.episode = {"parameters_json": json.dumps({"start": "1999-01-01", "end": "2026-10-01"})}
     mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
     learning.backlog()
-    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"] == "rejected"
+    status = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"]
+    assert status == "rejected: parameter start is not a value in the query"
 
 
 def test_worker_keeps_going_after_a_turn_fails(fake_llm, mock_db):
@@ -351,3 +370,100 @@ def test_worker_keeps_going_after_a_turn_fails(fake_llm, mock_db):
     learning.backlog()
     status = {t["turn_id"]: t["episode_status"] for t in mock_db[db.SESSIONS].find()}
     assert status["s_a_t1"].startswith("error:") and status["s_b_t1"] == "extracted"
+
+
+
+def test_worker_records_why_a_turn_was_skipped(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex", used_memory=False))
+    learning.backlog()
+    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"] == "skipped: memory was switched off"
+    assert episodes_count() == 0 and fake_llm.calls == []
+
+
+def test_a_turn_can_be_claimed_only_once(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
+    turn = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})
+    assert learning.claim(turn) is True    # the first worker takes it
+    assert learning.claim(turn) is False   # the second finds it taken
+    assert learning.process(turn) is None  # and leaves it alone
+    assert episodes_count() == 0 and fake_llm.calls == []
+
+
+def test_two_workers_given_the_same_turn_make_one_episode(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
+    event = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})  # both workers receive the same insert event
+    assert [learning.process(dict(event)), learning.process(dict(event))] == ["extracted", None]
+    assert episodes_count() == 1 and len(fake_llm.calls) == 1
+
+
+def test_worker_started_without_backlog_only_takes_newer_turns(fake_llm, mock_db):
+    started = datetime(2026, 11, 14, 18, 0, tzinfo=timezone.utc)
+    mock_db[db.SESSIONS].insert_many([make_turn("s_old_t1", "alex", ts=started - timedelta(hours=2)),
+                                      make_turn("s_new_t1", "sam", ts=started + timedelta(minutes=5))])
+    assert [t["turn_id"] for t in learning.pending(started)] == ["s_new_t1"]
+    assert learning.backlog(started) == 1
+    status = {t["turn_id"]: t.get("episode_status") for t in mock_db[db.SESSIONS].find()}
+    assert status == {"s_old_t1": None, "s_new_t1": "extracted"}
+    assert learning.backlog() == 1  # what --backlog adds: the older turn
+    assert episodes_count() == 2
+
+
+class FakeStream:
+    """A change stream that delivers the given insert events and then ends."""
+
+    def __init__(self, turns):
+        self.changes = [{"fullDocument": t} for t in turns]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(self.changes)
+
+
+def statuses(mock_db) -> dict:
+    return {t["turn_id"]: t.get("episode_status") for t in mock_db[db.SESSIONS].find()}
+
+
+def test_run_takes_turns_from_the_change_stream_and_leaves_older_ones(fake_llm, mock_db, monkeypatch):
+    now = datetime.now(timezone.utc)
+    mock_db[db.SESSIONS].insert_many([make_turn("s_old_t1", "alex", ts=now - timedelta(hours=2)),
+                                      make_turn("s_new_t1", "sam", ts=now - timedelta(seconds=1))])
+    arrived = mock_db[db.SESSIONS].find_one({"turn_id": "s_new_t1"})
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", lambda self, pipeline: FakeStream([arrived]), raising=False)
+    learning.run()  # returns when the fake stream ends
+    assert statuses(mock_db) == {"s_old_t1": None, "s_new_t1": "extracted"}
+
+
+def test_run_with_backlog_also_takes_the_older_turns(fake_llm, mock_db, monkeypatch):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_old_t1", "alex", ts=datetime.now(timezone.utc) - timedelta(hours=2)))
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", lambda self, pipeline: FakeStream([]), raising=False)
+    learning.run(include_backlog=True)
+    assert statuses(mock_db) == {"s_old_t1": "extracted"}
+
+
+def test_run_polls_when_change_streams_are_unavailable(fake_llm, mock_db, monkeypatch):
+    class Stop(Exception):
+        pass
+
+    def no_watch(self, pipeline):
+        raise OperationFailure("The $changeStream stage is only supported on replica sets")
+
+    naps = []
+
+    def nap(seconds):
+        naps.append(seconds)
+        if len(naps) == 1:  # a question is answered while the worker waits
+            mock_db[db.SESSIONS].insert_one(make_turn("s_new_t1", "sam", ts=datetime.now(timezone.utc)))
+        else:
+            raise Stop
+
+    mock_db[db.SESSIONS].insert_one(make_turn("s_old_t1", "alex", ts=datetime.now(timezone.utc) - timedelta(hours=2)))
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", no_watch, raising=False)
+    monkeypatch.setattr(learning.time, "sleep", nap)
+    with pytest.raises(Stop):
+        learning.run()
+    assert statuses(mock_db) == {"s_old_t1": None, "s_new_t1": "extracted"}

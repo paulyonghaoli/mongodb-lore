@@ -37,7 +37,8 @@ python -m scripts.generate_sales --drop     # ~243k sales docs (add --products-p
 python -m scripts.setup_indexes             # regular + memory_vec / episode_vec Vector Search indexes
 python -m scripts.seed_memories --reset     # starting memories, incl. the deliberately wrong net margin
 uvicorn app.main:app --reload               # http://localhost:8000
-python -m app.workers.learning              # optional: turns sessions into episodes (change stream)
+python -m app.workers.learning              # optional: turns newly answered questions into episodes (change stream)
+python -m app.workers.learning --backlog    # the same, plus older questions never processed (one model call each)
 python -m scripts.monthly_memory_review     # previous month; creates reviewer queues and pending memory proposals
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
