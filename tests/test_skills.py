@@ -4,12 +4,14 @@ session turn -> episode -> cluster -> draft skill -> tests -> publish / retire -
 """
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import mongomock
 import pytest
 from bson import json_util
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pymongo.errors import OperationFailure
 
 from app import audit, db, embeddings, llm, skills
 from app.guard import GuardError
@@ -53,6 +55,7 @@ class FakeLLM:
         self.calls: list[dict] = []
         self.episode: dict = {}        # fields to override in the episode answer
         self.template: list | None = None  # template to return instead of the faithful one
+        self.skill: dict = {}          # fields to override in the skill answer
 
     def __call__(self, system, messages, usage, schema=None, **kw):
         self.calls.append({"system": system, "messages": messages, "schema": schema})
@@ -68,7 +71,8 @@ class FakeLLM:
             group = re.search(r'"_id": "\$(\w+)"', payload[0]["pipeline"]).group(1)
             return {"name": f"return_rate_by_{group}", "description": f"Return rate by {group} for a date range",
                     "parameters_json": json.dumps({"start": "ISO date, inclusive", "end": "ISO date, exclusive"}),
-                    "pipeline_template_json": json.dumps(self.template or rate_pipeline("{{start}}", "{{end}}", group))}
+                    "pipeline_template_json": json.dumps(self.template or rate_pipeline("{{start}}", "{{end}}", group)),
+                    **self.skill}
         raise AssertionError("unexpected prompt")
 
 
@@ -167,6 +171,7 @@ def test_answered_turn_becomes_episode(fake_llm):
     {"outcome": "rejected"},                       # blocked by the guard
     {"outcome": "failed"},                         # the query did not run
     {"skill": {"name": "x", "parameters": {}}},    # the turn reused a skill: nothing new to learn
+    {"used_memory": False},                        # the "without memory" half of a replay
 ])
 def test_turns_that_never_become_episodes(fake_llm, change):
     assert skills.extract_episode(make_turn("s_a_t1", "alex", **change)) is None
@@ -178,6 +183,21 @@ def test_episode_rejected_when_a_parameter_value_is_not_in_the_pipeline(fake_llm
     fake_llm.episode = {"parameters_json": json.dumps({"start": "2026-09-01", "end": "2026-10-01", "region": "East"})}
     assert skills.extract_episode(make_turn("s_a_t1", "alex")) is None
     assert episodes_count() == 0
+
+
+def test_one_episode_per_turn_named_after_it(fake_llm):
+    first = skills.extract_episode(make_turn("s_a_t1", "alex"))
+    assert first["episode_id"] == "ep_s_a_t1"
+    again, reason = skills.extract(make_turn("s_a_t1", "alex"))
+    assert again is None and reason == "skipped: already extracted"
+    assert episodes_count() == 1 and len(fake_llm.calls) == 1  # no second model call either
+
+
+def test_extract_says_why_a_turn_gave_no_episode(fake_llm):
+    assert skills.extract(make_turn("s_a_t1", "alex", outcome="rejected"))[1] == "skipped: outcome is rejected"
+    assert skills.extract(make_turn("s_a_t2", "alex", used_memory=False))[1] == "skipped: memory was switched off"
+    fake_llm.episode = {"parameters_json": json.dumps({"start": "2026-09-01", "end": "2026-10-01", "region": "East"})}
+    assert skills.extract(make_turn("s_a_t3", "alex"))[1] == "rejected: parameter region is not a value in the query"
 
 
 # ---------- clustering ----------
@@ -243,6 +263,159 @@ def test_replay_test_fails_when_the_template_changes_the_result(ready_cluster, f
 def test_generating_again_gives_the_next_version(ready_cluster):
     assert skills.generate(ready_cluster)["version"] == 1
     assert skills.generate(ready_cluster)["version"] == 2
+
+
+def test_the_model_drafts_from_a_recent_sample_covering_several_users(fake_llm, sales):
+    months = [("2026-08-01", "2026-09-01"), ("2026-09-01", "2026-10-01"), ("2026-10-01", "2026-11-01")]
+    for i in range(9):  # alex asks seven times, sam twice
+        skills.extract_episode(make_turn(f"s_{i}_t1", "sam" if i in (0, 5) else "alex", *months[i % 3]))
+    s = skills.generate()
+    sent = json.loads(fake_llm.calls[-1]["messages"][0]["content"])
+    assert len(sent) == skills.MAX_DRAFT_EPISODES
+    assert len(s["source_episodes"]) == 9 and len(s["drafted_from"]) == skills.MAX_DRAFT_EPISODES
+    users = {db.app_db()[db.EPISODES].find_one({"episode_id": i})["user_id"] for i in s["drafted_from"]}
+    assert users == {"alex", "sam"}  # the minority user is in the sample
+    assert len(s["test_details"]["replay"]) == skills.REPLAY_EPISODES
+
+
+@pytest.mark.parametrize("broken, message", [
+    ({"pipeline_template_json": "[{not json"}, "valid JSON"),
+    ({"name": "Return Rate!"}, "snake_case"),
+    ({"parameters_json": json.dumps({"start": "x"})}, "declares parameters ['start'] but its template uses ['end', 'start']"),
+    ({"pipeline_template_json": json.dumps([{"$lookup": {"from": "memories", "as": "m"}}]),
+      "parameters_json": "{}"}, "not allowed"),
+])
+def test_a_bad_draft_from_the_model_is_refused_and_not_saved(ready_cluster, fake_llm, broken, message):
+    fake_llm.skill = broken
+    with pytest.raises(HTTPException) as e:
+        skills.generate(ready_cluster)
+    assert e.value.status_code == 422 and message in e.value.detail
+    assert db.app_db()[db.SKILLS].count_documents({}) == 0
+
+
+def test_compare_results_looks_at_values_not_at_column_names_or_order():
+    a = [{"category": "Camping", "revenue": 200.0, "return_rate": 0.1321}, {"category": "Home", "revenue": 100.0, "return_rate": 0.05}]
+    renamed = [{"rate": 0.05, "cat": "Home", "sales": 100.0}, {"rate": 0.13214, "cat": "Camping", "sales": 200.0}]
+    assert skills.compare_results(a, renamed) is None                      # other names, other order, rounding
+    assert skills.compare_results(a, [{"c": "Camping", "r": 0.1321}, {"c": "Home", "r": 0.05}]) is None  # fewer columns
+    assert skills.compare_results(a, [{"c": "Camping", "r": 0.20}, {"c": "Home", "r": 0.05}]) == "different numbers for Camping"
+    assert skills.compare_results(a, a[:1]) == "different rows: 1 missing, 0 unexpected"
+    assert skills.compare_results(a, [{"category": "East", "return_rate": 0.1321}, {"category": "Home", "return_rate": 0.05}]) \
+        == "different rows: 1 missing, 1 unexpected"
+
+
+def test_replay_passes_when_a_source_query_names_its_columns_differently(fake_llm, sales):
+    other_names = [
+        {"$match": {"date": {"$gte": day("2026-10-01"), "$lt": day("2026-11-01")}}},
+        {"$group": {"_id": "$category", "sales": {"$sum": "$revenue"}, "refunds": {"$sum": "$returns"}}},
+        {"$project": {"_id": 0, "cat": "$_id", "sales": 1, "rate": {"$divide": ["$refunds", "$sales"]}}},
+        {"$sort": {"rate": -1}},
+    ]
+    skills.extract_episode(make_turn("s_a_t1", "alex", "2026-09-01", "2026-10-01"))
+    skills.extract_episode(make_turn("s_b_t1", "sam", "2026-08-01", "2026-09-01"))
+    skills.extract_episode(make_turn("s_c_t1", "fatima", "2026-10-01", "2026-11-01", pipeline=json_util.dumps(other_names)))
+    s = skills.generate()
+    assert [r["result"] for r in s["test_details"]["replay"]] == ["pass", "pass", "pass"]
+    assert s["test_results"]["replay"] == "pass"
+
+
+def test_test_details_say_what_was_run_and_for_whom(ready_cluster):
+    s = skills.generate(ready_cluster)
+    replay = s["test_details"]["replay"]
+    assert sorted(r["user_id"] for r in replay) == ["alex", "fatima", "sam"]
+    assert all(r["result"] == "pass" and r["rows"] == 2 and r["reason"] is None for r in replay)
+    assert {r["user_id"]: r["result"] for r in s["test_details"]["permissions"]} == \
+        {"fatima": "pass", "alex": "pass", "sam": "pass"}
+
+
+def test_replay_detail_names_the_episode_that_failed(ready_cluster, fake_llm):
+    fake_llm.template = rate_pipeline("{{start}}", "{{end}}", "region")
+    s = skills.generate(ready_cluster)
+    assert all(r["result"] == "fail" and r["reason"].startswith("different rows") for r in s["test_details"]["replay"])
+
+
+def test_permission_test_fails_when_a_restricted_user_gets_other_rows(ready_cluster, monkeypatch):
+    guarded = skills.guard_pipeline
+
+    def leaky(user, *a, **kw):  # a guard that forgets the store manager's row filter
+        safe, gov = guarded(user, *a, **kw)
+        return [s for s in safe if not (user.user_id == "sam" and s == {"$match": {"region": "East"}})], gov
+
+    monkeypatch.setattr(skills, "guard_pipeline", leaky)
+    s = skills.generate(ready_cluster)
+    by_user = {r["user_id"]: r for r in s["test_details"]["permissions"]}
+    assert by_user["sam"]["result"] == "fail" and by_user["alex"]["result"] == "pass"
+    assert s["test_results"] == {"replay": "pass", "permissions": "fail"}
+
+
+def test_a_skill_needing_a_hidden_field_is_tested_only_for_users_who_may_run_it(fake_llm, sales):
+    cost = [
+        {"$match": {"date": {"$gte": day("2026-09-01"), "$lt": day("2026-10-01")}}},
+        {"$group": {"_id": "$category", "revenue": {"$sum": "$revenue"}, "cost": {"$sum": "$supplier_cost"}}},
+        {"$project": {"_id": 0, "category": "$_id", "cost_share": {"$divide": ["$cost", "$revenue"]}}},
+        {"$sort": {"category": 1}},
+    ]
+    template = json.loads(json_util.dumps(cost).replace('{"$date": "2026-09-01T00:00:00Z"}', '"{{start}}"')
+                          .replace('{"$date": "2026-10-01T00:00:00Z"}', '"{{end}}"'))
+    fake_llm.template = template
+    for turn_id in ("s_a_t1", "s_a_t2", "s_a_t3"):
+        skills.extract_episode(make_turn(turn_id, "fatima", pipeline=json_util.dumps(cost), metrics_used=[]))
+    db.app_db()[db.EPISODES].update_one({"turn_id": "s_a_t3"}, {"$set": {"user_id": "second_finance_user"}})
+    s = skills.generate()
+    assert "supplier_cost" in s["required_fields"]
+    assert {r["user_id"]: (r["result"], r["reason"]) for r in s["test_details"]["permissions"]} == {
+        "fatima": ("pass", None), "alex": ("not offered", "needs supplier_cost"), "sam": ("not offered", "needs supplier_cost")}
+    assert s["test_results"]["permissions"] == "pass"
+
+
+# ---------- where a skill came from ----------
+
+def test_skill_list_says_where_each_skill_came_from(ready_cluster, mock_db):
+    mock_db[db.SESSIONS].insert_many([make_turn(t, u, a, b) for t, u, a, b in PERIODS])
+    mock_db[db.EPISODES].update_many({"user_id": {"$in": ["sam", "fatima"]}}, {"$set": {"synthetic": True}})
+    drafted = skills.generate(ready_cluster)
+    (listed,) = skills.list_all()
+    assert drafted["sources"] == listed["sources"] == {"episodes": 3, "users": ["alex", "fatima", "sam"], "sample": 2}
+    assert listed["example_question"].startswith("Return rate by category from ")
+
+
+def test_clusters_show_structure_sample_count_and_skills_drafted(ready_cluster, mock_db):
+    mock_db[db.EPISODES].update_one({"user_id": "sam"}, {"$set": {"synthetic": True}})
+    skills.generate(ready_cluster)
+    (cluster,) = skills.clusters()
+    assert cluster["sample"] == 1 and cluster["structure"]["group_fields"] == ["category"]
+    assert cluster["skills"] == [{"name": "return_rate_by_category", "version": 1, "status": "draft"}]
+
+
+def test_cluster_episodes_are_for_the_reviewer_and_carry_the_question(ready_cluster, client, mock_db):
+    mock_db[db.SESSIONS].insert_many([make_turn(t, u, a, b) for t, u, a, b in PERIODS])
+    url = f"/api/skills/clusters/{ready_cluster}/episodes"
+    assert client.get(url, headers={"X-User": "alex"}).status_code == 403  # other people's questions
+    found = client.get(url, headers={"X-User": "fatima"}).json()
+    assert sorted(e["user_id"] for e in found) == ["alex", "fatima", "sam"]
+    assert all(e["question"].startswith("Return rate by category") and e["sample"] is False for e in found)
+    assert all("pipeline" not in e and "embedding" not in e for e in found)
+
+
+def test_learning_status_counts_what_became_of_answered_turns(fake_llm, mock_db, client):
+    mock_db[db.SESSIONS].insert_many([
+        make_turn("s_a_t1", "alex"), make_turn("s_a_t2", "alex", used_memory=False),
+        make_turn("s_a_t3", "alex", outcome="rejected")])
+    learning.backlog()
+    mock_db[db.SESSIONS].insert_one(make_turn("s_b_t1", "sam"))  # saved after the worker last looked
+    # activity written by scripts/synthesize_activity.py is counted apart from questions asked in the app
+    mock_db[db.SESSIONS].insert_one(make_turn("s_syn_t1", "alex", synthetic=True, episode_status="extracted"))
+    mock_db[db.EPISODES].insert_one({"episode_id": "ep_s_syn_t1", "turn_id": "s_syn_t1", "user_id": "alex", "cluster_id": "c_x",
+                                     "intent": "x", "synthetic": True})
+    status = client.get("/api/skills/learning", headers={"X-User": "sam"}).json()
+    assert (status["extracted"], status["skipped"], status["waiting"]) == (1, 1, 1)
+    assert (status["live_episodes"], status["sample_episodes"]) == (1, 1)
+
+
+def test_only_the_reviewer_can_draft(ready_cluster, client):
+    assert client.post("/api/skills/generate", json={"cluster_id": ready_cluster}, headers={"X-User": "alex"}).status_code == 403
+    res = client.post("/api/skills/generate", json={"cluster_id": ready_cluster}, headers={"X-User": "fatima"})
+    assert res.status_code == 200 and res.json()["status"] == "draft"
 
 
 # ---------- publishing, retiring, offering ----------
@@ -343,7 +516,8 @@ def test_worker_marks_a_rejected_extraction(fake_llm, mock_db):
     fake_llm.episode = {"parameters_json": json.dumps({"start": "1999-01-01", "end": "2026-10-01"})}
     mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
     learning.backlog()
-    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"] == "rejected"
+    status = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"]
+    assert status == "rejected: parameter start is not a value in the query"
 
 
 def test_worker_keeps_going_after_a_turn_fails(fake_llm, mock_db):
@@ -351,3 +525,100 @@ def test_worker_keeps_going_after_a_turn_fails(fake_llm, mock_db):
     learning.backlog()
     status = {t["turn_id"]: t["episode_status"] for t in mock_db[db.SESSIONS].find()}
     assert status["s_a_t1"].startswith("error:") and status["s_b_t1"] == "extracted"
+
+
+
+def test_worker_records_why_a_turn_was_skipped(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex", used_memory=False))
+    learning.backlog()
+    assert mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})["episode_status"] == "skipped: memory was switched off"
+    assert episodes_count() == 0 and fake_llm.calls == []
+
+
+def test_a_turn_can_be_claimed_only_once(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
+    turn = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})
+    assert learning.claim(turn) is True    # the first worker takes it
+    assert learning.claim(turn) is False   # the second finds it taken
+    assert learning.process(turn) is None  # and leaves it alone
+    assert episodes_count() == 0 and fake_llm.calls == []
+
+
+def test_two_workers_given_the_same_turn_make_one_episode(fake_llm, mock_db):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_a_t1", "alex"))
+    event = mock_db[db.SESSIONS].find_one({"turn_id": "s_a_t1"})  # both workers receive the same insert event
+    assert [learning.process(dict(event)), learning.process(dict(event))] == ["extracted", None]
+    assert episodes_count() == 1 and len(fake_llm.calls) == 1
+
+
+def test_worker_started_without_backlog_only_takes_newer_turns(fake_llm, mock_db):
+    started = datetime(2026, 11, 14, 18, 0, tzinfo=timezone.utc)
+    mock_db[db.SESSIONS].insert_many([make_turn("s_old_t1", "alex", ts=started - timedelta(hours=2)),
+                                      make_turn("s_new_t1", "sam", ts=started + timedelta(minutes=5))])
+    assert [t["turn_id"] for t in learning.pending(started)] == ["s_new_t1"]
+    assert learning.backlog(started) == 1
+    status = {t["turn_id"]: t.get("episode_status") for t in mock_db[db.SESSIONS].find()}
+    assert status == {"s_old_t1": None, "s_new_t1": "extracted"}
+    assert learning.backlog() == 1  # what --backlog adds: the older turn
+    assert episodes_count() == 2
+
+
+class FakeStream:
+    """A change stream that delivers the given insert events and then ends."""
+
+    def __init__(self, turns):
+        self.changes = [{"fullDocument": t} for t in turns]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(self.changes)
+
+
+def statuses(mock_db) -> dict:
+    return {t["turn_id"]: t.get("episode_status") for t in mock_db[db.SESSIONS].find()}
+
+
+def test_run_takes_turns_from_the_change_stream_and_leaves_older_ones(fake_llm, mock_db, monkeypatch):
+    now = datetime.now(timezone.utc)
+    mock_db[db.SESSIONS].insert_many([make_turn("s_old_t1", "alex", ts=now - timedelta(hours=2)),
+                                      make_turn("s_new_t1", "sam", ts=now - timedelta(seconds=1))])
+    arrived = mock_db[db.SESSIONS].find_one({"turn_id": "s_new_t1"})
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", lambda self, pipeline: FakeStream([arrived]), raising=False)
+    learning.run()  # returns when the fake stream ends
+    assert statuses(mock_db) == {"s_old_t1": None, "s_new_t1": "extracted"}
+
+
+def test_run_with_backlog_also_takes_the_older_turns(fake_llm, mock_db, monkeypatch):
+    mock_db[db.SESSIONS].insert_one(make_turn("s_old_t1", "alex", ts=datetime.now(timezone.utc) - timedelta(hours=2)))
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", lambda self, pipeline: FakeStream([]), raising=False)
+    learning.run(include_backlog=True)
+    assert statuses(mock_db) == {"s_old_t1": "extracted"}
+
+
+def test_run_polls_when_change_streams_are_unavailable(fake_llm, mock_db, monkeypatch):
+    class Stop(Exception):
+        pass
+
+    def no_watch(self, pipeline):
+        raise OperationFailure("The $changeStream stage is only supported on replica sets")
+
+    naps = []
+
+    def nap(seconds):
+        naps.append(seconds)
+        if len(naps) == 1:  # a question is answered while the worker waits
+            mock_db[db.SESSIONS].insert_one(make_turn("s_new_t1", "sam", ts=datetime.now(timezone.utc)))
+        else:
+            raise Stop
+
+    mock_db[db.SESSIONS].insert_one(make_turn("s_old_t1", "alex", ts=datetime.now(timezone.utc) - timedelta(hours=2)))
+    monkeypatch.setattr(mongomock.collection.Collection, "watch", no_watch, raising=False)
+    monkeypatch.setattr(learning.time, "sleep", nap)
+    with pytest.raises(Stop):
+        learning.run()
+    assert statuses(mock_db) == {"s_old_t1": None, "s_new_t1": "extracted"}

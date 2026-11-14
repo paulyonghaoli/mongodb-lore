@@ -37,10 +37,14 @@ python -m scripts.generate_sales --drop     # ~243k sales docs (add --products-p
 python -m scripts.setup_indexes             # regular + memory_vec / episode_vec Vector Search indexes
 python -m scripts.seed_memories --reset     # starting memories, incl. the deliberately wrong net margin
 uvicorn app.main:app --reload               # http://localhost:8000
-python -m app.workers.learning              # optional: turns sessions into episodes (change stream)
+python -m app.workers.learning              # optional: turns newly answered questions into episodes (change stream)
+python -m app.workers.learning --backlog    # the same, plus older questions never processed (one model call each)
 python -m scripts.monthly_memory_review     # previous month; creates reviewer queues and pending memory proposals
 pytest -q                                   # runs offline: mongomock + hash embeddings
 ```
+
+`--drop` replaces the `sales` collection, and `--reset` clears memories, sessions, episodes, skills and the
+audit log. Never run either against a database other people are using.
 
 Offline dev without Atlas or Voyage: set `EMBEDDING_PROVIDER=hash` and `VECTOR_BACKEND=local`, and point
 `MONGODB_URI` at a local `mongod`.
@@ -118,6 +122,7 @@ All calls send `X-User: fatima | alex | sam`.
 | GET | `/api/memory-review/runs` · `/items?batch_id=&item_type=&status=` | Monthly query and memory review queues (reviewers only) |
 | POST | `/api/memory-review/items/{item_id}/delete` · `/retain` | Reviewer confirms query deletion / memory forgetting, or keeps the item |
 | GET | `/api/skills` · `/api/skills/clusters` | Skill library and episode clusters |
+| GET | `/api/skills/clusters/{id}/episodes` · `/api/skills/learning` | The questions behind a cluster (reviewer only); what became of answered turns |
 | POST | `/api/skills/generate` · `/api/skills/{name}/publish` · `/retire` | Draft (manual trigger), publish, retire |
 | GET | `/api/audit` | Recent audit events (reviewers see all; others see their own) |
 

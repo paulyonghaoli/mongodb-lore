@@ -1,7 +1,7 @@
-"""Skills workstream: list, clusters, generate (manual trigger), publish, retire."""
-from fastapi import APIRouter, Depends
+"""Skills workstream: list, clusters and their episodes, learning status, generate (manual trigger), publish, retire."""
+from fastapi import APIRouter, Depends, HTTPException
 
-from .. import skills
+from .. import llm, skills
 from ..models import GenerateSkillBody, ReasonBody, UserContext
 from ..users import current_user, require_reviewer
 
@@ -20,9 +20,25 @@ def list_clusters(user: UserContext = Depends(current_user)) -> list[dict]:
     return skills.clusters()
 
 
+@router.get("/clusters/{cluster_id}/episodes")
+def cluster_episodes(cluster_id: str, user: UserContext = Depends(current_user)) -> list[dict]:
+    """What a cluster is made of. Reviewer only: it shows other users' questions."""
+    require_reviewer(user)
+    return skills.cluster_episodes(cluster_id)
+
+
+@router.get("/learning")
+def learning_status(user: UserContext = Depends(current_user)) -> dict:
+    return skills.learning_status()
+
+
 @router.post("/generate")
 def generate(body: GenerateSkillBody | None = None, user: UserContext = Depends(current_user)) -> dict:
-    return skills.generate((body or GenerateSkillBody()).cluster_id)
+    require_reviewer(user)
+    try:
+        return skills.generate((body or GenerateSkillBody()).cluster_id)
+    except llm.LLMError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/{name}/publish")

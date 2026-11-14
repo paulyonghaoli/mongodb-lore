@@ -649,22 +649,57 @@ function prettyJson(text) {
   try { return JSON.stringify(typeof text === "string" ? JSON.parse(text) : text, null, 2); } catch { return String(text); }
 }
 
+// How much of something comes from the sample activity written by scripts/synthesize_activity.py
+const sampleNote = (sample, total) => (!sample ? "" : sample >= total ? "sample data" : `${sample} of ${total} from sample data`);
+const people = (ids) => (ids || []).map((u) => esc(userName(u))).join(", ");
+
 function clusterItem(c) {
-  const draft = c.ready && state.me.can_review
-    ? `<button type="button" class="small" data-draft="${esc(c.cluster_id)}">Draft skill</button>` : "";
+  const st = c.structure || {};
+  const drafted = (c.skills || []).map((k) => `<span class="chip" title="Drafted from this cluster">${esc(k.name)} v${esc(k.version)} · ${esc(k.status)}</span>`).join("");
+  const note = sampleNote(c.sample, c.episodes);
+  let action = "";
+  if (c.ready && state.me.can_review) {
+    action = `<button type="button" class="small${c.skills?.length ? " secondary" : ""}" data-draft="${esc(c.cluster_id)}">${c.skills?.length ? "Draft again" : "Draft skill"}</button>`;
+  } else if (c.ready) {
+    action = '<span class="muted small">A reviewer can draft a skill from this</span>';
+  }
+  const shared = [
+    ...(st.metrics || []).map((m) => `metric ${m}`),
+    ...(st.group_fields || []).map((f) => `by ${f}`),
+    ...((st.parameter_names || []).length ? [`parameters: ${st.parameter_names.join(", ")}`] : []),
+  ];
   return `<div class="item">
     <div class="item-head"><span class="status status-${c.ready ? "ready" : "waiting"}">${c.ready ? "Ready" : "Not yet"}</span>
-      <span class="item-title">${esc(c.intent)}</span></div>
-    <div class="item-meta"><code>${esc(c.cluster_id)}</code><span>${plural(c.episodes, "episode")}</span>
-      <span>from ${c.users.map((u) => esc(userName(u))).join(", ")}</span></div>
-    <div class="item-actions">${draft}</div>
+      <span class="item-title">${esc(c.intent)}</span>${note ? `<span class="muted small">· ${esc(note)}</span>` : ""}${drafted}</div>
+    <div class="item-body">${shared.length ? `<span class="muted small">What its episodes share:</span> ${tags(shared)}` : ""}
+      ${state.me.can_review ? `<details data-episodes="${esc(c.cluster_id)}"><summary>The questions behind it</summary><div class="episodes muted small">Loading…</div></details>` : ""}</div>
+    <div class="item-meta"><code>${esc(c.cluster_id)}</code><span>${plural(c.episodes, "episode")} from ${people(c.users)}</span>
+      ${c.ready ? "" : "<span>Needs three episodes from two people</span>"}</div>
+    <div class="item-actions">${action}</div>
   </div>`;
+}
+
+function testDetails(s) {
+  const d = s.test_details;
+  if (!d) return "";
+  const range = (p) => (p?.start && p?.end ? `${p.start} to ${p.end}` : JSON.stringify(p || {}));
+  const row = (who, what, result, reason) => `<div class="kv"><span>${esc(who)}</span><span>${esc(what)}
+    <span class="status status-${result === "pass" ? "pass" : result === "fail" ? "fail" : "waiting"}">${esc(result)}</span>
+    ${reason ? `<span class="muted small">${esc(reason)}</span>` : ""}</span></div>`;
+  return `<div class="box-title">Replay: the source query and the skill must give the same result</div>
+    ${(d.replay || []).map((r) => row(userName(r.user_id), `${range(r.parameters)} · ${plural(r.rows ?? 0, "row")}`, r.result, r.reason)).join("")}
+    <div class="box-title">Permissions: each user gets the result cut down to their own rows</div>
+    ${(d.permissions || []).map((r) => row(userName(r.user_id), roleLabel(r.role), r.result, r.reason)).join("")}`;
 }
 
 function skillItem(s) {
   const tests = Object.entries(s.test_results || {});
   const passed = tests.length > 0 && tests.every(([, v]) => v === "pass");
   const actions = [];
+  if (s.status === "published" && s.offered_to_you && s.example_question) {
+    actions.push(`<button type="button" class="small secondary" data-skill="${esc(s.name)}" data-act="try" data-question="${esc(s.example_question)}"
+      title="Fills the Analyst box with a question this skill answers">Try it</button>`);
+  }
   if (state.me.can_review) {
     if (["draft", "stale"].includes(s.status)) {
       actions.push(`<button type="button" class="small" data-skill="${esc(s.name)}" data-act="publish"${passed ? "" : ' disabled title="Tests must pass first"'}>Publish</button>`);
@@ -677,7 +712,10 @@ function skillItem(s) {
   const versions = Object.entries(s.metric_versions || {}).map(([k, v]) => `${k}@${v}`);
   const availability = s.status !== "published" ? "" : s.offered_to_you
     ? '<span class="tag tag-ok">Available to you</span>' : '<span class="tag tag-warn">Needs a field hidden from you</span>';
-  return `<div class="item${["retired"].includes(s.status) ? " dim" : ""}">
+  const src = s.sources || {};
+  const note = sampleNote(src.sample, src.episodes);
+  const origin = src.episodes ? `Built from ${plural(src.episodes, "episode")}${src.users?.length ? ` by ${people(src.users)}` : ""}${note ? ` · ${esc(note)}` : ""}` : "";
+  return `<div class="item${s.status === "retired" ? " dim" : ""}">
     <div class="item-head"><span class="status status-${esc(s.status)}">${esc(s.status)}</span>
       <span class="item-title">${esc(s.name)}</span><span class="chip">v${esc(s.version)}</span>
       ${tests.map(([k, v]) => `<span class="status status-${esc(v)}">${esc(k)} test: ${esc(v)}</span>`).join("")}
@@ -685,41 +723,81 @@ function skillItem(s) {
     <div class="item-body">${esc(s.description)}
       ${s.status === "stale" && s.stale_reason ? `<div class="reason error">Needs review: ${esc(s.stale_reason)}</div>` : ""}
       ${s.status === "retired" && s.retired_reason ? `<div class="reason muted">Retired: ${esc(s.retired_reason)}</div>` : ""}
-      <details><summary>Parameters, fields and query template</summary>
+      <details><summary>Parameters, tests and query template</summary>
         ${params.length ? `<div class="kv"><span>Parameters</span><span>${params.map(([k, v]) => `<code>${esc(k)}</code> ${esc(v)}`).join("<br>")}</span></div>` : ""}
         <div class="kv"><span>Reads fields</span><span>${tags(s.required_fields || []) || "–"}</span></div>
         ${versions.length ? `<div class="kv"><span>Built on</span><span>${tags(versions)}</span></div>` : ""}
-        <div class="kv"><span>Episodes</span><span>${tags(s.source_episodes || []) || "–"}</span></div>
+        ${testDetails(s)}
         <pre>${esc(prettyJson(s.pipeline_template))}</pre>
       </details></div>
-    <div class="item-meta">${s.reviewed_by ? `<span>Published by ${esc(userName(s.reviewed_by))}${s.published_at ? `, ${esc(fmtTime(s.published_at))}` : ""}</span>` : "<span>Not reviewed yet</span>"}
+    <div class="item-meta">${origin ? `<span>${origin}</span>` : ""}
+      ${s.reviewed_by ? `<span>Published by ${esc(userName(s.reviewed_by))}${s.published_at ? `, ${esc(fmtTime(s.published_at))}` : ""}</span>` : "<span>Not reviewed yet</span>"}
       ${s.cluster_id ? `<span>From cluster <code>${esc(s.cluster_id)}</code></span>` : ""}</div>
     <div class="item-actions">${actions.join("")}</div>
   </div>`;
 }
 
+function learningNote(l) {
+  // Two sources of episodes, never mixed up in this line: questions asked in the app, and sample activity loaded by a script.
+  const parts = [`${l.extracted} became episodes`, `${l.skipped} skipped`];
+  if (l.rejected) parts.push(`${l.rejected} rejected`);
+  if (l.error) parts.push(`${plural(l.error, "error")}`);
+  if (l.processing) parts.push(`${l.processing} in progress`);
+  if (l.waiting) parts.push(`${l.waiting} not processed (the learning worker only takes questions asked after it starts)`);
+  const latest = l.last_live_episode_at ? ` The latest at ${fmtTime(l.last_live_episode_at)}.` : "";
+  return `Questions asked in the app: ${parts.join(", ")}.${latest} Sample activity loaded by script: ${plural(l.sample_episodes ?? 0, "episode")}.`;
+}
+
 async function loadSkills() {
-  const [clusters, { skills }] = await Promise.all([api("/api/skills/clusters"), api("/api/skills")]);
+  const [clusters, { skills }, learning] = await Promise.all([
+    api("/api/skills/clusters"), api("/api/skills"), api("/api/skills/learning").catch(() => null)]);
+  $("#learning-note").textContent = learning ? learningNote(learning) : "";
   $("#cluster-list").innerHTML = clusters.length ? clusters.map(clusterItem).join("")
     : '<div class="empty">No episodes yet. They appear after questions are answered and the learning worker has processed them.</div>';
   $("#skill-list").innerHTML = skills.length ? skills.map(skillItem).join("")
     : '<div class="empty">No skills yet. Draft one from a ready cluster.</div>';
 }
 
+// The questions behind a cluster load when the reviewer opens them ("toggle" does not bubble: capture it).
+$("#cluster-list").addEventListener("toggle", async (e) => {
+  const d = e.target;
+  if (!d.matches?.("details[data-episodes]") || !d.open || d.dataset.loaded) return;
+  d.dataset.loaded = "1";
+  const box = $(".episodes", d);
+  try {
+    const episodes = await api(`/api/skills/clusters/${encodeURIComponent(d.dataset.episodes)}/episodes`);
+    const range = (p) => (p?.start && p?.end ? `${p.start} to ${p.end}` : JSON.stringify(p || {}));
+    box.innerHTML = episodes.map((ep) => `<div class="episode"><span>${esc(userName(ep.user_id))}</span>
+      <span>${ep.question ? `“${esc(ep.question)}”` : '<span class="muted">question deleted</span>'}</span>
+      <code>${esc(range(ep.parameters))}</code><span>${esc(fmtTime(ep.created_at))}${ep.sample ? " · sample" : ""}</span></div>`).join("")
+      || "No episodes.";
+  } catch (err) {
+    box.textContent = err.message;
+    delete d.dataset.loaded;
+  }
+}, true);
+
 $("#cluster-list").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-draft]");
   if (!b) return;
+  const label = b.textContent;
   busy([b], async () => {
     b.textContent = "Drafting and testing…";
     const s = await api("/api/skills/generate", { method: "POST", body: { cluster_id: b.dataset.draft } });
     toast(`Drafted ${s.name} v${s.version}. Tests: ${Object.entries(s.test_results || {}).map(([k, v]) => `${k} ${v}`).join(", ")}.`);
     await loadSkills();
-  }).finally(() => { if (b.isConnected) b.textContent = "Draft skill"; });
+  }).finally(() => { if (b.isConnected) b.textContent = label; });
 });
 $("#skill-list").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-skill]");
   if (!b) return;
   const name = b.dataset.skill;
+  if (b.dataset.act === "try") {
+    $("#question").value = b.dataset.question;
+    showTab("analyst");
+    $("#question").focus();
+    return;
+  }
   if (b.dataset.act === "publish") {
     busy([b], async () => {
       await api(`/api/skills/${encodeURIComponent(name)}/publish`, { method: "POST" });
